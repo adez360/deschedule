@@ -2,8 +2,16 @@
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useSession } from "next-auth/react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Zap, Send, Archive, CalendarDays, Copy, Check, Loader2, Maximize2, Minimize2 } from "lucide-react";
+import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import {
+  DndContext, DragOverlay, useDraggable, useDroppable,
+  useSensor, useSensors, PointerSensor, TouchSensor,
+  type DragEndEvent, type DragStartEvent,
+} from "@dnd-kit/core";
+import {
+  ChevronLeft, ChevronRight, Zap, Send, Archive, CalendarDays, Copy, Check,
+  Loader2, Maximize2, Minimize2, Trash2, Undo2, GripVertical,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -15,10 +23,11 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   fetchStores, fetchOrgUsers, fetchScheduleList, fetchScheduleDetail,
-  generateSchedule, updateScheduleStatus,
+  generateSchedule, updateScheduleStatus, createAssignment, deleteAssignment,
   buildEmployeeRows, buildActual,
-  type StoreDTO, type EmployeeRow,
+  type StoreDTO, type EmployeeRow, type AssignmentDTO, type UserDTO,
 } from "@/lib/schedules-api";
+import { fetchUserAvailability } from "@/lib/availability-api";
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -344,6 +353,409 @@ function CoverageHeatmap({ actual, weekDates, loading, isFullscreen }: {
   );
 }
 
+// ─── ManualEditView (drag-and-drop) ────────────────────────────────────────
+
+type DragItemData =
+  | { kind: "employee"; userId: string }
+  | { kind: "assignment"; assignment: AssignmentDTO };
+
+type DropTargetData =
+  | { kind: "cell"; day: number; hour: number }
+  | { kind: "trash" };
+
+type UndoOp = { label: string; inverse: () => Promise<void> };
+
+const EDIT_HOURS = Array.from({ length: 24 }, (_, i) => (i + 7) % 24);
+
+function DraggableEmployeeCard({ user, color, hours }: {
+  user: UserDTO;
+  color: { bg: string; border: string };
+  hours: number;
+}) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `employee-${user.id}`,
+    data: { kind: "employee", userId: user.id } satisfies DragItemData,
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
+      style={{ touchAction: "none", opacity: isDragging ? 0.35 : 1 }}
+      className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 cursor-grab active:cursor-grabbing hover:bg-white/[0.08] transition-colors select-none"
+    >
+      <GripVertical className="size-3.5 text-white/20 flex-shrink-0" />
+      <div className="size-7 rounded-full flex items-center justify-center text-xs font-semibold text-white flex-shrink-0"
+        style={{ background: color.bg, border: `1px solid ${color.border}` }}>
+        {user.name[0]}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-sm text-white truncate">{user.name}</div>
+        <div className="text-[10px] text-white/35">本週 {hours}h</div>
+      </div>
+    </div>
+  );
+}
+
+function DraggableChip({ assignment, color, name }: {
+  assignment: AssignmentDTO;
+  color: { bg: string; border: string };
+  name: string;
+}) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `assignment-${assignment.id}`,
+    data: { kind: "assignment", assignment } satisfies DragItemData,
+  });
+  return (
+    <Tooltip>
+      <TooltipTrigger>
+        <div
+          ref={setNodeRef}
+          {...listeners}
+          {...attributes}
+          style={{ background: color.bg, border: `1px solid ${color.border}`, touchAction: "none", opacity: isDragging ? 0.3 : 1 }}
+          className="size-5 rounded-full flex items-center justify-center text-[9px] font-semibold text-white cursor-grab active:cursor-grabbing select-none"
+        >
+          {name[0]}
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-xs">
+        {name}{assignment.is_manual && " · 手動排班"}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function DroppableCell({ day, hour, children }: {
+  day: number;
+  hour: number;
+  children: React.ReactNode;
+}) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: `cell-${day}-${hour}`,
+    data: { kind: "cell", day, hour } satisfies DropTargetData,
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(
+        "border-r border-b border-white/[0.05] last:border-r-0 min-h-9 p-1 flex flex-wrap content-start gap-1 transition-colors",
+        isOver && "bg-purple-500/15 ring-1 ring-inset ring-purple-400/50",
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+function DroppableTrash() {
+  const { setNodeRef, isOver } = useDroppable({
+    id: "trash",
+    data: { kind: "trash" } satisfies DropTargetData,
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(
+        "flex items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-3 text-xs transition-colors",
+        isOver ? "border-red-400/60 bg-red-500/10 text-red-300" : "border-white/15 text-white/30",
+      )}
+    >
+      <Trash2 className="size-3.5" /> 拖曳到此處移除排班
+    </div>
+  );
+}
+
+function ManualEditView({
+  scheduleId, assignments, orgUsers, weekDates, weekStartStr, token, queryClient, isFullscreen, disabled,
+}: {
+  scheduleId: string | null;
+  assignments: AssignmentDTO[];
+  orgUsers: UserDTO[];
+  weekDates: Date[];
+  weekStartStr: string;
+  token: string;
+  queryClient: QueryClient;
+  isFullscreen: boolean;
+  disabled: boolean;
+}) {
+  const [activeDrag, setActiveDrag] = useState<DragItemData | null>(null);
+  const [undoStack, setUndoStack] = useState<UndoOp[]>([]);
+  const [pending, setPending] = useState(false);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 6 } }),
+  );
+
+  const colorOf = useCallback(
+    (userId: string) => {
+      const idx = orgUsers.findIndex((u) => u.id === userId);
+      return SHIFT_COLORS[(idx < 0 ? 0 : idx) % SHIFT_COLORS.length];
+    },
+    [orgUsers],
+  );
+  const nameOf = useCallback(
+    (userId: string) => orgUsers.find((u) => u.id === userId)?.name ?? "未知員工",
+    [orgUsers],
+  );
+
+  const cellsByPos = useMemo(() => {
+    const m = new Map<string, AssignmentDTO[]>();
+    for (const a of assignments) {
+      const key = `${a.day}-${a.hour}`;
+      const arr = m.get(key) ?? [];
+      arr.push(a);
+      m.set(key, arr);
+    }
+    return m;
+  }, [assignments]);
+
+  const invalidate = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["scheduleDetail", scheduleId] });
+  }, [queryClient, scheduleId]);
+
+  const pushUndo = useCallback((label: string, inverse: () => Promise<void>) => {
+    setUndoStack((s) => [...s.slice(-9), { label, inverse }]);
+  }, []);
+
+  const handleUndo = useCallback(async () => {
+    const last = undoStack[undoStack.length - 1];
+    if (!last || pending) return;
+    setUndoStack((s) => s.slice(0, -1));
+    setPending(true);
+    try {
+      await last.inverse();
+      invalidate();
+      toast.success(`已復原：${last.label}`);
+    } catch (e) {
+      toast.error(`復原失敗：${(e as Error).message}`);
+    } finally {
+      setPending(false);
+    }
+  }, [undoStack, pending, invalidate]);
+
+  // Best-effort availability check — silently skipped if the manager lacks
+  // `employee.availability.edit` (still allows the drop, just no warning).
+  const checkUnavailable = useCallback(async (userId: string, day: number, hour: number) => {
+    try {
+      const data = await queryClient.fetchQuery({
+        queryKey: ["userAvailabilityForSchedule", userId, weekStartStr],
+        queryFn: () => fetchUserAvailability(userId, weekStartStr, token),
+        staleTime: 5 * 60_000,
+      });
+      const slots = data?.[0]?.slots;
+      return !!slots && slots[day]?.[hour] === false;
+    } catch {
+      return false;
+    }
+  }, [queryClient, weekStartStr, token]);
+
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    setActiveDrag((event.active.data.current as DragItemData) ?? null);
+  }, []);
+
+  const handleDragEnd = useCallback(async (event: DragEndEvent) => {
+    setActiveDrag(null);
+    const { active, over } = event;
+    if (!over || !scheduleId) return;
+    const activeData = active.data.current as DragItemData | undefined;
+    const overData = over.data.current as DropTargetData | undefined;
+    if (!activeData || !overData) return;
+
+    // ── Drop on trash → remove assignment ──────────────────────────────────
+    if (overData.kind === "trash") {
+      if (activeData.kind !== "assignment") return;
+      const a = activeData.assignment;
+      setPending(true);
+      try {
+        await deleteAssignment(scheduleId, a.id, token);
+        pushUndo(`移除 ${nameOf(a.user_id)} · ${DAYS[a.day]} ${pad2(a.hour)}:00`, async () => {
+          await createAssignment(scheduleId, a.user_id, a.day, a.hour, token);
+        });
+        invalidate();
+        toast.success("已移除排班");
+      } catch (e) {
+        toast.error(`移除失敗：${(e as Error).message}`);
+      } finally {
+        setPending(false);
+      }
+      return;
+    }
+
+    const { day, hour } = overData;
+
+    // ── Drop on a cell ───────────────────────────────────────────────────────
+    if (activeData.kind === "employee") {
+      const userId = activeData.userId;
+      if (assignments.some((x) => x.user_id === userId && x.day === day && x.hour === hour)) {
+        toast.error("此員工已排班於該時段");
+        return;
+      }
+      setPending(true);
+      try {
+        const unavailable = await checkUnavailable(userId, day, hour);
+        const created = await createAssignment(scheduleId, userId, day, hour, token);
+        pushUndo(`新增 ${nameOf(userId)} · ${DAYS[day]} ${pad2(hour)}:00`, async () => {
+          await deleteAssignment(scheduleId, created.id, token);
+        });
+        invalidate();
+        if (unavailable) {
+          toast.warning(`已新增排班，但 ${nameOf(userId)} 該時段標記為不可用（已強制排班）`);
+        } else {
+          toast.success("已新增排班");
+        }
+      } catch (e) {
+        toast.error(`新增失敗：${(e as Error).message}`);
+      } finally {
+        setPending(false);
+      }
+      return;
+    }
+
+    if (activeData.kind === "assignment") {
+      const a = activeData.assignment;
+      if (a.day === day && a.hour === hour) return;
+      if (assignments.some((x) => x.user_id === a.user_id && x.day === day && x.hour === hour)) {
+        toast.error("此員工已排班於該時段");
+        return;
+      }
+      setPending(true);
+      try {
+        const unavailable = await checkUnavailable(a.user_id, day, hour);
+        const created = await createAssignment(scheduleId, a.user_id, day, hour, token);
+        await deleteAssignment(scheduleId, a.id, token);
+        pushUndo(`移動 ${nameOf(a.user_id)} · ${DAYS[a.day]} ${pad2(a.hour)}:00 → ${DAYS[day]} ${pad2(hour)}:00`, async () => {
+          await createAssignment(scheduleId, a.user_id, a.day, a.hour, token);
+          await deleteAssignment(scheduleId, created.id, token);
+        });
+        invalidate();
+        if (unavailable) {
+          toast.warning(`已移動排班，但 ${nameOf(a.user_id)} 該時段標記為不可用（已強制排班）`);
+        } else {
+          toast.success("已移動排班");
+        }
+      } catch (e) {
+        toast.error(`移動失敗：${(e as Error).message}`);
+      } finally {
+        setPending(false);
+      }
+    }
+  }, [scheduleId, assignments, token, checkUnavailable, pushUndo, nameOf, invalidate]);
+
+  if (disabled) {
+    return (
+      <div className="rounded-2xl border border-white/10 py-16 text-center text-sm text-white/30"
+        style={{ background: "rgba(255,255,255,0.03)" }}>
+        本週尚無班表草稿，請先點擊「自動排班」建立後再進行手動調整
+      </div>
+    );
+  }
+
+  return (
+    <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+      <div className={cn("flex gap-4", isFullscreen ? "flex-1 min-h-0" : "flex-col lg:flex-row")}>
+        {/* Sidebar — draggable employee list */}
+        <div className={cn(
+          "flex flex-col gap-2 rounded-2xl border border-white/10 p-3",
+          isFullscreen ? "w-64 flex-shrink-0 overflow-y-auto" : "lg:w-64 lg:flex-shrink-0",
+        )} style={{ background: "rgba(255,255,255,0.03)" }}>
+          <div className="flex items-center justify-between px-1">
+            <p className="text-xs text-white/40">員工清單 · 拖曳至右側時格</p>
+            <Button
+              variant="outline" size="sm"
+              className="h-7 gap-1.5 border-white/10 text-white/50 hover:bg-white/5 hover:text-white text-[11px] px-2"
+              onClick={handleUndo}
+              disabled={undoStack.length === 0 || pending}
+            >
+              <Undo2 className="size-3" /> 復原 ({undoStack.length})
+            </Button>
+          </div>
+          <div className={cn("flex flex-col gap-1.5", isFullscreen ? "" : "max-h-80 lg:max-h-none overflow-y-auto")}>
+            {orgUsers.map((u) => {
+              const hours = assignments.filter((a) => a.user_id === u.id).length;
+              return <DraggableEmployeeCard key={u.id} user={u} color={colorOf(u.id)} hours={hours} />;
+            })}
+            {orgUsers.length === 0 && (
+              <p className="px-2 py-4 text-center text-xs text-white/25">尚無員工資料</p>
+            )}
+          </div>
+          <DroppableTrash />
+          <p className="px-1 text-[10px] leading-relaxed text-white/25">
+            拖曳員工卡片到時格可新增排班；拖曳已排班的圓形頭像可移動或移除（拉到垃圾桶區）。系統會自動驗證可用性，若違反仍可強制排班。
+          </p>
+        </div>
+
+        {/* Grid */}
+        <div className={cn(
+          "flex-1 min-w-0 overflow-x-auto overflow-y-auto rounded-2xl border border-white/10",
+          isFullscreen && "min-h-0",
+        )} style={{
+          background: "rgba(255,255,255,0.03)",
+          maxHeight: isFullscreen ? undefined : "calc(100dvh - 350px)",
+          touchAction: "pan-x pan-y",
+        }}>
+          <div className="min-w-[640px]">
+            <div className="grid border-b border-white/10 sticky top-0 z-10 bg-[rgba(13,13,26,0.92)] backdrop-blur-sm"
+              style={{ gridTemplateColumns: "4rem repeat(7, 130px)" }}>
+              <div />
+              {DAYS.map((d, i) => (
+                <div key={d} className="py-2 text-center border-r border-white/[0.06] last:border-r-0">
+                  <div className="text-xs font-medium text-white/60">{d}</div>
+                  <div className="text-[10px] text-white/25">{fmtDate(weekDates[i])}</div>
+                </div>
+              ))}
+            </div>
+            {EDIT_HOURS.map((h) => (
+              <div key={h} className="grid border-b border-white/[0.05] last:border-b-0"
+                style={{ gridTemplateColumns: "4rem repeat(7, 130px)" }}>
+                <div className="flex items-center justify-end pr-2 text-[10px] text-white/35 py-1">
+                  {pad2(h)}:00
+                </div>
+                {DAYS.map((_, di) => {
+                  const here = cellsByPos.get(`${di}-${h}`) ?? [];
+                  return (
+                    <DroppableCell key={di} day={di} hour={h}>
+                      {here.map((a) => (
+                        <DraggableChip key={a.id} assignment={a} color={colorOf(a.user_id)} name={nameOf(a.user_id)} />
+                      ))}
+                    </DroppableCell>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <DragOverlay>
+        {activeDrag?.kind === "employee" && (() => {
+          const u = orgUsers.find((x) => x.id === activeDrag.userId);
+          if (!u) return null;
+          const c = colorOf(u.id);
+          return (
+            <div className="flex items-center gap-2 rounded-lg border px-3 py-2 shadow-xl"
+              style={{ background: "rgba(20,20,36,0.95)", borderColor: c.border }}>
+              <div className="size-7 rounded-full flex items-center justify-center text-xs font-semibold text-white"
+                style={{ background: c.bg, border: `1px solid ${c.border}` }}>{u.name[0]}</div>
+              <span className="text-sm text-white">{u.name}</span>
+            </div>
+          );
+        })()}
+        {activeDrag?.kind === "assignment" && (() => {
+          const c = colorOf(activeDrag.assignment.user_id);
+          return (
+            <div className="size-6 rounded-full flex items-center justify-center text-[10px] font-semibold text-white shadow-xl"
+              style={{ background: c.bg, border: `1px solid ${c.border}` }}>
+              {nameOf(activeDrag.assignment.user_id)[0]}
+            </div>
+          );
+        })()}
+      </DragOverlay>
+    </DndContext>
+  );
+}
+
 // ─── Page ──────────────────────────────────────────────────────────────────
 
 export default function SchedulesPage() {
@@ -626,6 +1038,11 @@ export default function SchedulesPage() {
                 className="rounded-lg px-5 py-2 text-sm text-white/50 data-[state=active]:bg-purple-600/30 data-[state=active]:text-white data-[state=active]:shadow-none">
                 覆蓋率
               </TabsTrigger>
+              <TabsTrigger
+                value="manual"
+                className="rounded-lg px-5 py-2 text-sm text-white/50 data-[state=active]:bg-purple-600/30 data-[state=active]:text-white data-[state=active]:shadow-none">
+                手動編輯
+              </TabsTrigger>
             </TabsList>
             <button
               onClick={toggleFullscreen}
@@ -663,6 +1080,22 @@ export default function SchedulesPage() {
               weekDates={weekDates}
               loading={scheduleLoading}
               isFullscreen={isFullscreen}
+            />
+          </TabsContent>
+          <TabsContent
+            value="manual"
+            className={cn("mt-5", isFullscreen && "mt-3 flex-1 min-h-0 flex flex-col")}
+          >
+            <ManualEditView
+              scheduleId={currentScheduleSummary?.id ?? null}
+              assignments={scheduleDetail?.assignments ?? []}
+              orgUsers={orgUsers}
+              weekDates={weekDates}
+              weekStartStr={weekStartStr}
+              token={token}
+              queryClient={queryClient}
+              isFullscreen={isFullscreen}
+              disabled={!currentScheduleSummary || status === "archived"}
             />
           </TabsContent>
         </Tabs>

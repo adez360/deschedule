@@ -28,6 +28,9 @@ export const fetchAvailability = (fromDate: string, token: string) =>
     token,
   );
 
+export const fetchUserAvailability = (userId: string, week: string, token: string) =>
+  apiFetch<AvailabilityDTO[]>(`/users/${userId}/availability?week=${week}`, token);
+
 export const saveAvailability = (
   weekStart: string,
   slots: boolean[][],

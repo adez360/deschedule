@@ -49,7 +49,7 @@ async def load_inputs(
         .distinct()
         .join(UserRoleGroup, UserRoleGroup.user_id == User.id)
         .join(RoleGroup, RoleGroup.id == UserRoleGroup.role_group_id)
-        .where(RoleGroup.store_id == store_id, User.is_active.is_(True))
+        .where(RoleGroup.store_ids.any(store_id), User.is_active.is_(True))
     )
     employees = emp_result.scalars().all()
     user_ids = [e.id for e in employees]

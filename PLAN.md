@@ -445,13 +445,22 @@ score(assignment) = preference_weight(employee, store) × availability(employee,
 
 #### 5.1.2 手動排班
 
-- 員工清單（側邊欄）顯示：姓名、所有身份組（含門市標籤）、當週已排時數、合約工時上限
-- 支援拖曳員工至時格
-- 拖曳放置後自動驗證可用性，違規時顯示警告（仍可強制放置）
-- 手動指派以 `is_manual = true` 標記，重新自動排班不會覆蓋
-- 支援 undo（至少 10 步）
+> ✅ **已實作並通過瀏覽器端到端驗證（2026-06-08）**：`/schedules` 新增「手動編輯」分頁，使用 dnd-kit 實作拖曳排班，詳見下方實作記錄。
 
-**班表發佈後行為**：
+- 員工清單（側邊欄）顯示：姓名、本週已排時數（拖曳卡片，依大頭貼顏色與員工視角一致）
+- 支援拖曳員工卡片至 7×24 時格新增指派；拖曳已排班大頭貼可在時格間移動，或拖曳到垃圾桶區移除
+- 拖曳放置後自動驗證可用性（呼叫 `GET /users/{user_id}/availability?week=`，無權限時靜默略過驗證），違規時以警告 toast 提示「已強制排班」，**仍會完成放置**
+- 重複指派防呆：同一員工已在該時段時顯示錯誤 toast 並中止操作
+- 手動指派一律以 `is_manual = true` 標記（後端 `POST /assignments` 自動處理），重新自動排班不會覆蓋
+- 支援 undo（最多保留 10 步）：每個操作（新增／移動／移除）會推入「逆操作」closure，點擊「復原」依序執行對應的建立／刪除 API 呼叫並還原畫面
+
+**實作完成記錄（2026-06-08）**：
+- 前端：`schedules/page.tsx` 新增 `ManualEditView`（含 `DraggableEmployeeCard`、`DraggableChip`、`DroppableCell`、`DroppableTrash`），以 `DndContext` + `useDraggable`/`useDroppable`/`DragOverlay` 實作；`schedules-api.ts` 新增 `createAssignment`/`deleteAssignment`；`availability-api.ts` 新增 `fetchUserAvailability`
+- 修正 `apiFetch` 對 204/空回應的 JSON 解析錯誤（DELETE 回應為空 body 時不再丟出 "Unexpected end of JSON input"）
+- 順帶修正後端 `scheduler.py` 既有 bug：`load_inputs` 仍使用已棄用的 `RoleGroup.store_id`（單一門市）查詢條件，改為 `RoleGroup.store_ids.any(store_id)`（對應 RoleGroup 多門市 `store_ids[]` 改版），修正後自動排班才能正確找到門市員工
+- 瀏覽器端到端驗證：拖曳新增 → 移動 → 拖曳至垃圾桶移除 → 復原，並以資料庫查詢確認 `is_manual = true` 與筆數正確；驗證重複指派防呆不會建立多餘紀錄
+
+**班表發佈後行為**（未實作，列為後續項目）：
 - `status = published` 後，管理者仍可修改，每次修改記錄稽核日誌（操作者、時間、變更內容）
 - 發佈後的修改（尤其影響員工班次的異動）會自動通知受影響員工
 
@@ -799,7 +808,7 @@ PATCH  /api/schedules/:scheduleId/assignments/:id  # 手動拖曳覆蓋
 
 ### Phase 2 — 完整管理功能（建議 6 週）
 
-- [ ] 手動拖曳排班
+- [x] 手動拖曳排班 —— 已完成並通過瀏覽器端到端驗證（2026-06-08），詳見 5.1.2
 - [ ] 熱力圖覆蓋層
 - [ ] 歷史班表瀏覽
 - [ ] 工時統計與薪資報表（含 CSV 匯出）
@@ -851,7 +860,9 @@ PATCH  /api/schedules/:scheduleId/assignments/:id  # 手動拖曳覆蓋
 
 ---
 
-*文件版本：v0.10 — 2026-06-08*
+*文件版本：v0.11 — 2026-06-08*
+*Phase 2「手動拖曳排班」已完成並通過瀏覽器端到端驗證：`/schedules` 新增「手動編輯」分頁，以 dnd-kit 實作員工卡片／已排班大頭貼的拖放（新增、移動、移除）、可用性驗證警告（強制排班）、重複指派防呆、`is_manual` 自動標記、最多 10 步 undo；新增前端 API 封裝 `createAssignment`/`deleteAssignment`/`fetchUserAvailability`，並修正 `apiFetch` 對空回應的 JSON 解析錯誤與後端 `scheduler.py` 中過時的 `RoleGroup.store_id` 查詢（改為 `store_ids.any()`）。詳見 5.1.2、Phase 2 路線圖。*
+
 *議題 10（IDEA-02）已完成並通過瀏覽器端到端驗證：工作能力需求由「方案 A 疊加層 + 子需求人數（int）」改版為「標籤制（boolean）+ 與人數需求單表整合」。能力不再設人數、與人數採相同的「選取範圍 → 點選筆刷」操作（統一 `BrushPalette` 元件）、單表同時顯示（格內常駐能力色點）、單一儲存動作一併送出；排班演算法子配額由「N 人」改為「至少 1 人」覆蓋約束。含 Alembic migration `d7e5f3a9b1c4`。詳見 3.7.1、4.2、議題 9→10。*
 
 *Phase 1 全部完成。議題 2–9 全數已決策。API 路由已更新為實際實作版本。新增：JWT 過期自動登出（SessionGuard）、身份組適用範圍多選（store_ids）；整合 IDEA-01 臨時提案（員工管理頁面、個人資料擴充、門市管理頁面、職位能力系統、AI 輔助審查）。**議題 7 已決策並完成實作（2026-06-08）：合約模型重新設計（FT 月薪 / PT 時薪 / CUSTOM 無薪，移除起訖時間與工時上下限），且自動排班不設定每週工時上限**——已通過瀏覽器端到端驗證。**議題 8 已決策（2026-06-08）：新增權限位 `employee.identity.view`，透過身份組授予；持有者可見真實姓名 `name`，否則僅見 `nickname`**——詳見 3.1、第 2 節權限表、第 11 節議題 8。**議題 9 已決策並完成全套實作（2026-06-08）：採方案 A（獨立 `StoreSkillDemand` 表 + 需求頁疊加層 UI），含 `Skill`/`UserSkill`/`StoreSkillDemand` 後端模型、CRUD API、排班演算法子配額整合、員工能力指派 UI（`/employees`）、需求頁技能子需求疊加層與編輯子網格（`/settings/demand`）**——已通過瀏覽器端到端驗證（指派/移除技能、編輯與儲存子需求、疊加層顯示切換）。詳見 3.7.1、第 11 節議題 9。*

@@ -30,7 +30,9 @@ async function apiFetch<T>(path: string, token: string, init?: RequestInit): Pro
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail ?? `HTTP ${res.status}`);
   }
-  return res.json();
+  if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  return text ? JSON.parse(text) : (undefined as T);
 }
 
 // ─── API calls ──────────────────────────────────────────────────────────────
@@ -51,6 +53,23 @@ export const generateSchedule = (storeId: string, weekStart: string, token: stri
   apiFetch<ScheduleDetailDTO>(`/stores/${storeId}/schedules/generate`, token, {
     method: "POST",
     body: JSON.stringify({ week_start: weekStart }),
+  });
+
+export const createAssignment = (
+  scheduleId: string,
+  userId: string,
+  day: number,
+  hour: number,
+  token: string,
+) =>
+  apiFetch<AssignmentDTO>(`/schedules/${scheduleId}/assignments`, token, {
+    method: "POST",
+    body: JSON.stringify({ user_id: userId, day, hour }),
+  });
+
+export const deleteAssignment = (scheduleId: string, assignmentId: string, token: string) =>
+  apiFetch<void>(`/schedules/${scheduleId}/assignments/${assignmentId}`, token, {
+    method: "DELETE",
   });
 
 export const updateScheduleStatus = (
