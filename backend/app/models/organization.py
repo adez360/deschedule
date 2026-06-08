@@ -11,6 +11,7 @@ from app.core.database import Base
 
 if TYPE_CHECKING:
     from app.models.role_group import RoleGroup
+    from app.models.skill import Skill
     from app.models.store import Store
 
 
@@ -29,3 +30,4 @@ class Organization(Base):
 
     stores: Mapped[list[Store]] = relationship("Store", back_populates="organization")
     role_groups: Mapped[list[RoleGroup]] = relationship("RoleGroup", back_populates="organization")
+    skills: Mapped[list[Skill]] = relationship("Skill", back_populates="organization")

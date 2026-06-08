@@ -6,6 +6,7 @@ from app.models.availability import Availability, StorePreference
 from app.models.demand import DemandTemplate, ScheduleDeadlineConfig
 from app.models.schedule import Schedule, Assignment, ScheduleStatus
 from app.models.payroll import EmployeeContract, PayrollReport, ContractType
+from app.models.skill import Skill, UserSkill, StoreSkillDemand
 
 __all__ = [
     "Organization",
@@ -23,4 +24,7 @@ __all__ = [
     "EmployeeContract",
     "PayrollReport",
     "ContractType",
+    "Skill",
+    "UserSkill",
+    "StoreSkillDemand",
 ]

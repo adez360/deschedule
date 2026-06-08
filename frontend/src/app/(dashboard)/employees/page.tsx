@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, Loader2, Users, ChevronLeft, ChevronDown, ChevronRight, History } from "lucide-react";
+import { Save, Loader2, Users, ChevronLeft, ChevronDown, ChevronRight, History, Wrench, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
@@ -14,6 +14,10 @@ import {
   fetchActiveContract, fetchUserContracts, upsertContract,
   type ContractDTO, type ContractType, type ContractSetBody,
 } from "@/lib/contracts-api";
+import {
+  fetchSkills, fetchUserSkills, assignSkill, revokeSkill,
+  type SkillDTO,
+} from "@/lib/skills-api";
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -110,6 +114,21 @@ export default function EmployeesPage() {
     enabled: !!selectedUserId && !!token && showHistory,
   });
 
+  // Org skills + the selected employee's granted skills
+  const { data: orgSkills = [] } = useQuery({
+    queryKey: ["orgSkills", orgId],
+    queryFn: () => fetchSkills(orgId, token),
+    enabled: !!orgId && !!token,
+  });
+
+  const { data: userSkills = [], isLoading: userSkillsLoading } = useQuery({
+    queryKey: ["userSkills", selectedUserId],
+    queryFn: () => fetchUserSkills(selectedUserId!, token),
+    enabled: !!selectedUserId && !!token,
+  });
+
+  const grantedSkillIds = new Set(userSkills.map(us => us.skill_id));
+
   // Sync form when contract loads
   useEffect(() => {
     if (activeContract) {
@@ -134,6 +153,31 @@ export default function EmployeesPage() {
     },
     onError: (e: Error) => toast.error(`儲存失敗：${e.message}`),
   });
+
+  const assignSkillMut = useMutation({
+    mutationFn: (skillId: string) => assignSkill(selectedUserId!, skillId, token),
+    onSuccess: (_, skillId) => {
+      qc.invalidateQueries({ queryKey: ["userSkills", selectedUserId] });
+      const skill = orgSkills.find(s => s.id === skillId);
+      toast.success(`已賦予「${skill?.name ?? "技能"}」`);
+    },
+    onError: (e: Error) => toast.error(`操作失敗：${e.message}`),
+  });
+
+  const revokeSkillMut = useMutation({
+    mutationFn: (skillId: string) => revokeSkill(selectedUserId!, skillId, token),
+    onSuccess: (_, skillId) => {
+      qc.invalidateQueries({ queryKey: ["userSkills", selectedUserId] });
+      const skill = orgSkills.find(s => s.id === skillId);
+      toast.success(`已移除「${skill?.name ?? "技能"}」`);
+    },
+    onError: (e: Error) => toast.error(`操作失敗：${e.message}`),
+  });
+
+  const toggleSkill = (skill: SkillDTO) => {
+    if (grantedSkillIds.has(skill.id)) revokeSkillMut.mutate(skill.id);
+    else assignSkillMut.mutate(skill.id);
+  };
 
   const isValid =
     form.contract_type === "FT" ? (form.monthly_salary !== null && form.monthly_salary !== "" && +form.monthly_salary > 0) :
@@ -346,6 +390,54 @@ export default function EmployeesPage() {
               {saveMut.isPending ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
               {isNew ? "建立合約" : "儲存合約"}
             </Button>
+
+            {/* Skill assignment card */}
+            <div className="rounded-2xl border border-white/10 p-5 space-y-4"
+              style={{ background: "rgba(255,255,255,0.03)", backdropFilter: "blur(12px)" }}>
+              <div className="flex items-center gap-2">
+                <Wrench className="size-3.5 text-white/40" />
+                <h3 className="text-sm font-medium text-white/70">工作能力</h3>
+              </div>
+
+              {orgSkills.length === 0 ? (
+                <p className="text-[11px] text-white/25">組織尚未建立任何技能項目</p>
+              ) : userSkillsLoading ? (
+                <div className="flex flex-wrap gap-2">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <Skeleton key={i} className="h-9 w-24 rounded-xl bg-white/5" />
+                  ))}
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {orgSkills.map(skill => {
+                    const granted = grantedSkillIds.has(skill.id);
+                    const pending =
+                      (assignSkillMut.isPending && assignSkillMut.variables === skill.id) ||
+                      (revokeSkillMut.isPending && revokeSkillMut.variables === skill.id);
+                    return (
+                      <button key={skill.id}
+                        onClick={() => toggleSkill(skill)}
+                        disabled={pending}
+                        className={cn(
+                          "px-3.5 py-2 rounded-xl text-sm border transition-all flex items-center gap-1.5 disabled:opacity-50",
+                          granted
+                            ? "border-purple-500/50 bg-purple-600/20 text-white"
+                            : "border-white/10 bg-white/5 text-white/40 hover:bg-white/8 hover:text-white/70",
+                        )}
+                      >
+                        {pending ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : granted ? (
+                          <Check className="size-3.5" />
+                        ) : null}
+                        {skill.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-[11px] text-white/25">點擊技能標籤以賦予或移除該員工的工作能力</p>
+            </div>
 
             {/* Contract history */}
             <div className="rounded-2xl border border-white/10 overflow-hidden"

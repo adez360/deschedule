@@ -122,10 +122,12 @@ async def generate_schedule(
         db.add(schedule)
         await db.flush()  # resolve schedule.id before adding children
 
-    demand_slots, user_ids, avail_slots, pref_weights = await load_inputs(
+    demand_slots, user_ids, avail_slots, pref_weights, skill_demand_slots, user_skills = await load_inputs(
         store_id, body.week_start, db
     )
-    raw = run_greedy(user_ids, demand_slots, avail_slots, pref_weights)
+    raw = run_greedy(
+        user_ids, demand_slots, avail_slots, pref_weights, skill_demand_slots, user_skills
+    )
 
     for a in raw:
         db.add(Assignment(

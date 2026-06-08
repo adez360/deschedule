@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from app.models.availability import Availability, StorePreference
     from app.models.payroll import EmployeeContract
     from app.models.role_group import UserRoleGroup
+    from app.models.skill import UserSkill
 
 
 class User(Base):
@@ -38,3 +39,4 @@ class User(Base):
     availabilities: Mapped[list[Availability]] = relationship("Availability", back_populates="user")
     preferences: Mapped[list[StorePreference]] = relationship("StorePreference", back_populates="user")
     contracts: Mapped[list[EmployeeContract]] = relationship("EmployeeContract", back_populates="user")
+    skill_assignments: Mapped[list[UserSkill]] = relationship("UserSkill", back_populates="user")

@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, Copy, Trash2, ChevronLeft, ChevronRight, ChevronDown, Loader2, Maximize2, Minimize2 } from "lucide-react";
+import { Save, Copy, Trash2, ChevronLeft, ChevronRight, ChevronDown, Loader2, Maximize2, Minimize2, Layers, Wrench, PanelTop, PanelLeft, PanelRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
@@ -11,6 +11,15 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { fetchStores } from "@/lib/schedules-api";
 import { fetchDemand, saveDemand, copyDemandFromWeek, emptySlots } from "@/lib/demand-api";
+import { fetchSkills, fetchSkillDemand, setSkillDemand, type SkillDTO } from "@/lib/skills-api";
+
+const SKILL_TAG_COLORS = [
+  { bg: "rgba(45,212,191,0.35)",  text: "rgba(204,251,241,0.95)" },  // teal
+  { bg: "rgba(251,191,36,0.35)",  text: "rgba(254,243,199,0.95)" },  // amber
+  { bg: "rgba(244,114,182,0.35)", text: "rgba(252,231,243,0.95)" },  // pink
+  { bg: "rgba(96,165,250,0.35)",  text: "rgba(219,234,254,0.95)" },  // blue
+  { bg: "rgba(163,230,53,0.35)",  text: "rgba(236,252,203,0.95)" },  // lime
+];
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -52,15 +61,95 @@ function fmtDate(d: Date) { return `${d.getMonth() + 1}/${d.getDate()}`; }
 
 // ─── DemandGrid ─────────────────────────────────────────────────────────────
 
-function DemandGrid({ slots, onChange, weekDates, loading }: {
+interface OverlaySkill { id: string; name: string; slots: number[][]; colorIdx: number; }
+
+// Bundles every "work ability" related control so the fullscreen control panel
+// can host them alongside the cell-value setter (single source of truth — see page-level state).
+interface SkillPanelData {
+  skills: SkillDTO[];
+  skillDemandMap: Map<string, number[][]>;
+  showOverlay: boolean;
+  onToggleOverlay: () => void;
+  editSkillId: string | null;
+  onSelectSkill: (id: string | null) => void;
+  editingSkill: SkillDTO | undefined;
+  editLocalSlots: number[][];
+  onEditChange: (s: number[][]) => void;
+  editLoading: boolean;
+  editDirty: boolean;
+  onSaveEdit: () => void;
+  saving: boolean;
+}
+
+// Work-ability layer toggle + per-skill chips — shared between the page-level panel
+// and the fullscreen control panel so both stay visually and behaviourally identical.
+function SkillControls({ panel, vertical }: { panel: SkillPanelData; vertical?: boolean }) {
+  return (
+    <div className={cn("flex gap-1.5", vertical ? "flex-col items-stretch" : "flex-wrap items-center")}>
+      <button
+        onClick={panel.onToggleOverlay}
+        className={cn(
+          "flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[10px] border transition-all",
+          vertical && "justify-center",
+          panel.showOverlay
+            ? "border-purple-500/50 bg-purple-600/25 text-white"
+            : "border-white/[0.15] bg-white/[0.08] text-white/60 hover:bg-white/[0.13]",
+        )}
+      >
+        <Layers className="size-3" />
+        <span className="leading-none whitespace-nowrap">工作能力 {panel.showOverlay ? "顯示中" : "已隱藏"}</span>
+      </button>
+      <div className={cn("flex gap-1", vertical ? "flex-col items-stretch" : "flex-wrap items-center")}>
+        {panel.skills.map((sk, i) => {
+          const hasData = panel.skillDemandMap.has(sk.id);
+          const c = SKILL_TAG_COLORS[i % SKILL_TAG_COLORS.length];
+          const active = panel.editSkillId === sk.id;
+          return (
+            <button key={sk.id}
+              onClick={() => panel.onSelectSkill(active ? null : sk.id)}
+              className={cn(
+                "flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] border transition-all",
+                vertical && "justify-center",
+                active
+                  ? "border-purple-500/50 bg-purple-600/20 text-white"
+                  : "border-white/10 bg-white/5 text-white/50 hover:text-white/80",
+              )}
+            >
+              <span className="size-1.5 rounded-full shrink-0" style={{ background: c.bg, boxShadow: hasData ? `0 0 0 1px ${c.text}` : undefined }} />
+              <span className="truncate">{sk.name}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function DemandGrid({ slots, onChange, weekDates, loading, overlaySkills, showOverlay, onToggleOverlay, skillPanel, hideFullscreenButton }: {
   slots: number[][];
   onChange: (s: number[][]) => void;
   weekDates: Date[];
   loading: boolean;
+  overlaySkills?: OverlaySkill[];
+  showOverlay?: boolean;
+  onToggleOverlay?: () => void;
+  skillPanel?: SkillPanelData;
+  hideFullscreenButton?: boolean;
 }) {
   // Fullscreen — declare before any useEffect that references it
   const containerRef = useRef<HTMLDivElement>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Where the cell-value-setting panel docks while in fullscreen — cycles top → left → right
+  const [panelSide, setPanelSide] = useState<"top" | "left" | "right">("top");
+  const cyclePanelSide = useCallback(() => {
+    setPanelSide(p => p === "top" ? "left" : p === "left" ? "right" : "top");
+  }, []);
+  const PANEL_SIDE_META = {
+    top:   { icon: PanelTop,   label: "面板：上方" },
+    left:  { icon: PanelLeft,  label: "面板：左側" },
+    right: { icon: PanelRight, label: "面板：右側" },
+  } as const;
 
   // Scroll affordance
   const [isAtBottom, setIsAtBottom] = useState(false);
@@ -151,6 +240,111 @@ function DemandGrid({ slots, onChange, weekDates, loading }: {
           backdropFilter: "blur(12px)",
         }}
       >
+        {/* Fullscreen-only: cycle where the control panel docks (top / left / right) */}
+        {isFullscreen && (() => {
+          const Meta = PANEL_SIDE_META[panelSide];
+          return (
+            <button
+              onClick={cyclePanelSide}
+              className="absolute top-2 right-2 z-30 flex items-center gap-1.5 px-2 py-1.5 rounded-md border border-white/[0.15] bg-white/[0.08] text-white/65 hover:bg-white/[0.13] transition-all"
+              aria-label="切換設定面板位置"
+            >
+              <Meta.icon className="size-3" />
+              <span className="text-[9px] leading-none">{Meta.label}</span>
+            </button>
+          );
+        })()}
+
+        {/* Side panel — cell-value setter docked to the left/right edge while in fullscreen */}
+        {isFullscreen && panelSide !== "top" && (
+          <div
+            className={cn(
+              "absolute top-1/2 -translate-y-1/2 z-30 flex flex-col items-center gap-2 rounded-2xl border border-white/15 px-2.5 py-3",
+              panelSide === "left" ? "left-3" : "right-3",
+            )}
+            style={{ background: "rgba(13,13,26,0.95)", backdropFilter: "blur(12px)", maxHeight: "calc(100dvh - 5rem)", overflowY: "auto" }}
+          >
+            <span className={cn("text-[10px] text-center leading-tight transition-colors", selection ? "text-indigo-300/80" : "text-white/25")}>
+              {selection ? `已選\n${selCellCount} 格` : "選取格子\n設定人數"}
+            </span>
+            <div className="flex flex-col gap-1.5">
+              {[0, 1, 2, 3, 4, 5].map((n) => (
+                <button key={n}
+                  onClick={() => selection && applySelection(n)}
+                  disabled={!selection}
+                  className={cn(
+                    "size-8 rounded-md text-[11px] font-bold border transition-all",
+                    selection
+                      ? "border-white/20 hover:border-purple-500/60 hover:scale-110 cursor-pointer"
+                      : "border-white/[0.06] cursor-default opacity-30",
+                  )}
+                  style={{ background: DEMAND_STYLE[n].bg, color: n === 0 ? "rgba(255,255,255,0.5)" : DEMAND_STYLE[n].text }}>
+                  {n}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setSelection(null)}
+              className={cn(
+                "size-6 flex items-center justify-center rounded text-[11px] text-white/30 hover:text-white/70 hover:bg-white/10 transition-colors",
+                !selection && "invisible pointer-events-none",
+              )}
+            >
+              ✕
+            </button>
+
+            {/* Work-ability controls — unified into the same panel so nothing lives outside it in fullscreen */}
+            {skillPanel && skillPanel.skills.length > 0 && (
+              <>
+                <div className="w-full h-px bg-white/10" />
+                <SkillControls panel={skillPanel} vertical />
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Fullscreen-only: per-skill sub-demand editor — rendered inline (not a portal) so it
+            stays visible inside the fullscreen element; opened via the chips in the control panel */}
+        {isFullscreen && skillPanel?.editSkillId && skillPanel.editingSkill && (
+          <div
+            className="absolute inset-4 sm:inset-10 z-40 rounded-2xl border border-white/15 flex flex-col overflow-hidden"
+            style={{ background: "rgba(13,13,26,0.98)", backdropFilter: "blur(16px)" }}
+          >
+            <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-white/10 shrink-0">
+              <p className="text-xs text-white/50">
+                編輯「<span className="text-white/80 font-medium">{skillPanel.editingSkill.name}</span>」子需求人數
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  className="gap-2 border-0 text-white hover:opacity-90 h-8 text-xs"
+                  style={{ background: "linear-gradient(135deg,#7C3AED,#6D28D9)" }}
+                  onClick={skillPanel.onSaveEdit}
+                  disabled={skillPanel.saving || !skillPanel.editDirty}
+                >
+                  {skillPanel.saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
+                  {skillPanel.editDirty ? "儲存子需求" : "已儲存"}
+                </Button>
+                <button
+                  onClick={() => skillPanel.onSelectSkill(null)}
+                  className="size-7 flex items-center justify-center rounded text-white/40 hover:text-white/80 hover:bg-white/10 transition-colors"
+                  aria-label="關閉編輯"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto p-3">
+              <DemandGrid
+                slots={skillPanel.editLocalSlots}
+                onChange={skillPanel.onEditChange}
+                weekDates={weekDates}
+                loading={skillPanel.editLoading}
+                hideFullscreenButton
+              />
+            </div>
+          </div>
+        )}
+
         {/* Scroll affordance — bottom fade + hint, auto-hides when near bottom */}
         {!isAtBottom && (
           <div
@@ -201,20 +395,26 @@ function DemandGrid({ slots, onChange, weekDates, loading }: {
             {/* Sticky day header — fullscreen button replaces the "時段" label */}
             <div className="grid sticky top-0 z-10 border-b border-white/10 bg-[rgba(13,13,26,0.95)] backdrop-blur-sm"
               style={{ gridTemplateColumns: "2.5rem repeat(7, minmax(40px, 1fr)) 0.75rem" }}>
-              <button
-                onClick={toggleFullscreen}
-                className={cn(
-                  "flex items-center justify-center gap-1 px-1.5 py-1.5 transition-all",
-                  isFullscreen
-                    ? "rounded-md bg-white/[0.08] border border-white/[0.15] text-white/65 hover:bg-white/[0.13]"
-                    : "rounded-md rounded-tl-2xl bg-purple-600/20 border border-purple-500/30 text-purple-300 hover:bg-purple-600/32 hover:text-purple-200",
-                )}
-                aria-label={isFullscreen ? "退出全螢幕" : "全螢幕"}
-              >
-                {isFullscreen
-                  ? <><Minimize2 className="size-3" /><span className="text-[9px] leading-none">縮小</span></>
-                  : <><Maximize2 className="size-3" /><span className="text-[9px] leading-none">全螢</span></>}
-              </button>
+              {hideFullscreenButton ? (
+                <div className="flex items-center justify-center px-1.5 py-1.5 text-white/20">
+                  <Wrench className="size-3" />
+                </div>
+              ) : (
+                <button
+                  onClick={toggleFullscreen}
+                  className={cn(
+                    "flex items-center justify-center gap-1 px-1.5 py-1.5 transition-all",
+                    isFullscreen
+                      ? "rounded-md bg-white/[0.08] border border-white/[0.15] text-white/65 hover:bg-white/[0.13]"
+                      : "rounded-md rounded-tl-2xl bg-purple-600/20 border border-purple-500/30 text-purple-300 hover:bg-purple-600/32 hover:text-purple-200",
+                  )}
+                  aria-label={isFullscreen ? "退出全螢幕" : "全螢幕"}
+                >
+                  {isFullscreen
+                    ? <><Minimize2 className="size-3" /><span className="text-[9px] leading-none">縮小</span></>
+                    : <><Maximize2 className="size-3" /><span className="text-[9px] leading-none">全螢</span></>}
+                </button>
+              )}
               {DAYS.map((d, i) => (
                 <div key={d} className="py-3 text-center border-r border-white/[0.06] last:border-r-0">
                   <div className="text-xs font-medium text-white/70">{d}</div>
@@ -224,9 +424,11 @@ function DemandGrid({ slots, onChange, weekDates, loading }: {
               <div />{/* right scroll zone */}
             </div>
 
-            {/* Selection toolbar — fixed single-line height; ✕ always rendered to prevent CLS */}
+            {/* Selection toolbar — fixed single-line height; ✕ always rendered to prevent CLS.
+                Hidden when the side panel takes over (fullscreen + panelSide left/right). */}
             <div className={cn(
-              "sticky top-[45px] z-10 flex items-center gap-x-2 px-3 py-2 border-b bg-[rgba(13,13,26,0.97)] transition-colors",
+              "sticky top-[45px] z-10 items-center gap-x-2 px-3 py-2 border-b bg-[rgba(13,13,26,0.97)] transition-colors",
+              isFullscreen && panelSide !== "top" ? "hidden" : "flex",
               selection ? "border-indigo-500/30" : "border-white/[0.06]",
             )}>
               <span className={cn("text-[11px] shrink-0 transition-colors", selection ? "text-indigo-300/80" : "text-white/20")}>
@@ -265,6 +467,14 @@ function DemandGrid({ slots, onChange, weekDates, loading }: {
               >
                 ✕
               </button>
+
+              {/* Work-ability controls — folded into the same panel while in fullscreen */}
+              {isFullscreen && skillPanel && skillPanel.skills.length > 0 && (
+                <>
+                  <div className="w-px h-6 bg-white/10 shrink-0" />
+                  <SkillControls panel={skillPanel} />
+                </>
+              )}
             </div>
 
             {/* Rows */}
@@ -301,7 +511,7 @@ function DemandGrid({ slots, onChange, weekDates, loading }: {
                             <div
                               data-day={day}
                               data-row={rowIdx}
-                              className="h-7 rounded cursor-pointer select-none flex items-center justify-center text-[11px] font-semibold"
+                              className="relative overflow-hidden h-7 rounded cursor-pointer select-none flex items-center justify-center text-[11px] font-semibold"
                               style={{ ...bgStyle, touchAction: "none" }}
                               onPointerDown={(e) => {
                                 e.preventDefault();
@@ -313,6 +523,24 @@ function DemandGrid({ slots, onChange, weekDates, loading }: {
                               aria-label={`${DAYS[day]}曜 ${pad2(hour)}:00 需求 ${v} 人`}
                             >
                               <span style={{ color: inPrev || inSel ? "rgba(255,255,255,0.7)" : s.text }}>{v > 0 ? v : ""}</span>
+                              {showOverlay && overlaySkills && overlaySkills.length > 0 && (
+                                <div className="pointer-events-none absolute bottom-0 right-0 flex flex-wrap-reverse justify-end gap-[1px] p-[1px] max-w-full">
+                                  {overlaySkills
+                                    .filter(sk => sk.slots[day][hour] > 0)
+                                    .map(sk => {
+                                      const c = SKILL_TAG_COLORS[sk.colorIdx % SKILL_TAG_COLORS.length];
+                                      return (
+                                        <span key={sk.id}
+                                          className="text-[7px] leading-none px-[3px] py-[1px] rounded-sm font-bold whitespace-nowrap"
+                                          style={{ background: c.bg, color: c.text }}
+                                          title={`${sk.name}：${sk.slots[day][hour]} 人`}
+                                        >
+                                          {sk.name.slice(0, 1)}
+                                        </span>
+                                      );
+                                    })}
+                                </div>
+                              )}
                             </div>
                           </div>
                         );
@@ -431,6 +659,10 @@ export default function DemandPage() {
   const [weekStart, setWeekStart] = useState(() => getMondayOfWeek(new Date()));
   const [localSlots, setLocalSlots] = useState<number[][]>(emptySlots);
   const [isDirty, setIsDirty] = useState(false);
+  const [showOverlay, setShowOverlay] = useState(false);
+  const [editSkillId, setEditSkillId] = useState<string | null>(null);
+  const [skillLocalSlots, setSkillLocalSlots] = useState<number[][]>(emptySlots);
+  const [skillDirty, setSkillDirty] = useState(false);
   const qc = useQueryClient();
 
   const weekStartStr = toLocalDateStr(weekStart);
@@ -486,6 +718,57 @@ export default function DemandPage() {
     onError: (e: Error) => toast.error(`複製失敗：${e.message}`),
   });
 
+  // ── Skill sub-demand overlay ─────────────────────────────────────────────
+
+  const { data: orgSkills = [] } = useQuery({
+    queryKey: ["orgSkills", orgId],
+    queryFn: () => fetchSkills(orgId, token),
+    enabled: !!orgId && !!token,
+  });
+
+  const { data: skillDemands = [], isLoading: skillDemandLoading } = useQuery({
+    queryKey: ["skillDemand", storeId, weekStartStr],
+    queryFn: () => fetchSkillDemand(storeId, weekStartStr, token),
+    enabled: !!storeId && !!token,
+  });
+
+  const skillDemandMap = useMemo(() => {
+    const m = new Map<string, number[][]>();
+    for (const sd of skillDemands) m.set(sd.skill_id, sd.slots);
+    return m;
+  }, [skillDemands]);
+
+  const overlaySkills: OverlaySkill[] = useMemo(() =>
+    orgSkills.map((sk, i) => ({
+      id: sk.id,
+      name: sk.name,
+      slots: skillDemandMap.get(sk.id) ?? emptySlots(),
+      colorIdx: i,
+    })).filter(sk => skillDemandMap.has(sk.id)),
+  [orgSkills, skillDemandMap]);
+
+  // Sync the editor's local slots when the selected skill or its server data changes
+  useEffect(() => {
+    if (!editSkillId) return;
+    const existing = skillDemandMap.get(editSkillId);
+    setSkillLocalSlots(existing ? existing.map(r => [...r]) : emptySlots());
+    setSkillDirty(false);
+  }, [editSkillId, skillDemandMap]);
+
+  const handleSkillChange = useCallback((next: number[][]) => { setSkillLocalSlots(next); setSkillDirty(true); }, []);
+
+  const saveSkillDemandMut = useMutation({
+    mutationFn: () => setSkillDemand(storeId, weekStartStr, { skill_id: editSkillId!, slots: skillLocalSlots }, token),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["skillDemand", storeId, weekStartStr] });
+      setSkillDirty(false);
+      toast.success("技能子需求已儲存");
+    },
+    onError: (e: Error) => toast.error(`儲存失敗：${e.message}`),
+  });
+
+  const editingSkill = orgSkills.find(s => s.id === editSkillId);
+
   const isMutating = saveMut.isPending || copyMut.isPending;
 
   return (
@@ -513,7 +796,97 @@ export default function DemandPage() {
       </div>
 
       <QuickPreset onApply={handlePreset} />
-      <DemandGrid slots={localSlots} onChange={handleChange} weekDates={weekDates} loading={isLoading} />
+
+      {/* Skill overlay toggle + per-skill editor */}
+      {orgSkills.length > 0 && (
+        <div className="rounded-2xl border border-white/10 overflow-hidden" style={{ background: "rgba(255,255,255,0.03)" }}>
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+            <button
+              onClick={() => setShowOverlay(v => !v)}
+              className={cn(
+                "flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm border transition-all",
+                showOverlay
+                  ? "border-purple-500/50 bg-purple-600/20 text-white"
+                  : "border-white/10 bg-white/5 text-white/40 hover:bg-white/8 hover:text-white/70",
+              )}
+            >
+              <Layers className="size-3.5" />
+              工作能力
+              <span className="text-[10px] opacity-60">{showOverlay ? "顯示中" : "已隱藏"}</span>
+            </button>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Wrench className="size-3.5 text-white/30" />
+              {orgSkills.map(sk => {
+                const hasData = skillDemandMap.has(sk.id);
+                const colorIdx = orgSkills.findIndex(s => s.id === sk.id);
+                const c = SKILL_TAG_COLORS[colorIdx % SKILL_TAG_COLORS.length];
+                const active = editSkillId === sk.id;
+                return (
+                  <button key={sk.id}
+                    onClick={() => setEditSkillId(active ? null : sk.id)}
+                    className={cn(
+                      "flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs border transition-all",
+                      active
+                        ? "border-purple-500/50 bg-purple-600/20 text-white"
+                        : "border-white/10 bg-white/5 text-white/50 hover:text-white/80",
+                    )}
+                  >
+                    <span className="size-2 rounded-full" style={{ background: c.bg, boxShadow: hasData ? `0 0 0 1px ${c.text}` : undefined }} />
+                    {sk.name}
+                    {!hasData && <span className="text-[9px] text-white/25">未設定</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {editSkillId && editingSkill && (
+            <div className="border-t border-white/10 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-white/40">
+                  編輯「<span className="text-white/70">{editingSkill.name}</span>」子需求人數 — 表示總需求中至少需要這麼多人具備此技能
+                </p>
+                <Button
+                  className="gap-2 border-0 text-white hover:opacity-90 h-8 text-xs"
+                  style={{ background: "linear-gradient(135deg,#7C3AED,#6D28D9)" }}
+                  onClick={() => saveSkillDemandMut.mutate()}
+                  disabled={saveSkillDemandMut.isPending || !skillDirty}
+                >
+                  {saveSkillDemandMut.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
+                  {skillDirty ? "儲存子需求" : "已儲存"}
+                </Button>
+              </div>
+              <DemandGrid slots={skillLocalSlots} onChange={handleSkillChange} weekDates={weekDates} loading={skillDemandLoading} />
+            </div>
+          )}
+        </div>
+      )}
+
+      <DemandGrid
+        slots={localSlots}
+        onChange={handleChange}
+        weekDates={weekDates}
+        loading={isLoading}
+        overlaySkills={overlaySkills}
+        showOverlay={showOverlay}
+        onToggleOverlay={() => setShowOverlay(v => !v)}
+        skillPanel={orgSkills.length > 0 ? {
+          skills: orgSkills,
+          skillDemandMap,
+          showOverlay,
+          onToggleOverlay: () => setShowOverlay(v => !v),
+          editSkillId,
+          onSelectSkill: setEditSkillId,
+          editingSkill,
+          editLocalSlots: skillLocalSlots,
+          onEditChange: handleSkillChange,
+          editLoading: skillDemandLoading,
+          editDirty: skillDirty,
+          onSaveEdit: () => saveSkillDemandMut.mutate(),
+          saving: saveSkillDemandMut.isPending,
+        } : undefined}
+      />
 
       <div className="flex flex-wrap items-center gap-2">
         <Button className="gap-2 border-0 text-white hover:opacity-90"

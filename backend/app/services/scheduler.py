@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.availability import Availability, StorePreference
 from app.models.demand import DemandTemplate
 from app.models.role_group import RoleGroup, UserRoleGroup
+from app.models.skill import StoreSkillDemand, UserSkill
 from app.models.user import User
 
 DAILY_HOUR_MAX = 8
@@ -25,9 +26,11 @@ async def load_inputs(
     list[uuid.UUID],
     dict[uuid.UUID, list[list[bool]]],
     dict[uuid.UUID, float],
+    dict[uuid.UUID, list[list[int]]],
+    dict[uuid.UUID, set[uuid.UUID]],
 ]:
     """
-    Returns (demand_slots, user_ids, avail_slots, pref_weights).
+    Returns (demand_slots, user_ids, avail_slots, pref_weights, skill_demand_slots, user_skills).
     All DB loading is batched to minimise round-trips.
     """
     # ── Demand ────────────────────────────────────────────────────────────────
@@ -51,8 +54,19 @@ async def load_inputs(
     employees = emp_result.scalars().all()
     user_ids = [e.id for e in employees]
 
+    # ── Skill sub-demand for this store/week ──────────────────────────────────
+    skill_demand_result = await db.execute(
+        select(StoreSkillDemand).where(
+            StoreSkillDemand.store_id == store_id,
+            StoreSkillDemand.week_start == week_start,
+        )
+    )
+    skill_demand_slots: dict[uuid.UUID, list[list[int]]] = {
+        sd.skill_id: sd.slots for sd in skill_demand_result.scalars().all()
+    }
+
     if not user_ids:
-        return demand_slots, [], {}, {}
+        return demand_slots, [], {}, {}, skill_demand_slots, {}
 
     # ── Availability (batch: specific week + default templates) ───────────────
     avail_result = await db.execute(
@@ -88,7 +102,16 @@ async def load_inputs(
     for uid in user_ids:
         pref_weights.setdefault(uid, 0.5)  # neutral default for employees with no preference set
 
-    return demand_slots, user_ids, avail_slots, pref_weights
+    # ── Employee skills ────────────────────────────────────────────────────────
+    user_skills: dict[uuid.UUID, set[uuid.UUID]] = {uid: set() for uid in user_ids}
+    if skill_demand_slots:
+        skill_result = await db.execute(
+            select(UserSkill).where(UserSkill.user_id.in_(user_ids))
+        )
+        for us in skill_result.scalars().all():
+            user_skills[us.user_id].add(us.skill_id)
+
+    return demand_slots, user_ids, avail_slots, pref_weights, skill_demand_slots, user_skills
 
 
 def run_greedy(
@@ -96,13 +119,22 @@ def run_greedy(
     demand_slots: list[list[int]],
     avail_slots: dict[uuid.UUID, list[list[bool]]],
     pref_weights: dict[uuid.UUID, float],
+    skill_demand_slots: dict[uuid.UUID, list[list[int]]] | None = None,
+    user_skills: dict[uuid.UUID, set[uuid.UUID]] | None = None,
 ) -> list[dict]:
     """
     Pure function — no I/O. Iterates slots day-by-hour, picks the highest-preference
     available employees up to the required headcount.
 
+    If skill_demand_slots is provided, it expresses sub-quotas within the total
+    headcount (e.g. "of these 3 people, at least 1 must have skill X") — those
+    quotas are filled first (best-effort; an under-staffed slot still fills with
+    whoever is available), then the remaining headcount with any candidate.
+
     Returns list of {"user_id", "day", "hour"}.
     """
+    skill_demand_slots = skill_demand_slots or {}
+    user_skills = user_skills or {}
     daily_hours: dict[uuid.UUID, list[int]] = {uid: [0] * 7 for uid in user_ids}
     assignments: list[dict] = []
 
@@ -122,7 +154,33 @@ def run_greedy(
                 reverse=True,
             )
 
-            for uid in candidates[:required]:
+            chosen: list[uuid.UUID] = []
+            chosen_set: set[uuid.UUID] = set()
+
+            for skill_id, slots in skill_demand_slots.items():
+                need = slots[day][hour]
+                if need <= 0:
+                    continue
+                already = sum(1 for uid in chosen if skill_id in user_skills.get(uid, set()))
+                remaining = need - already
+                if remaining <= 0:
+                    continue
+                qualified = [
+                    uid for uid in candidates
+                    if uid not in chosen_set and skill_id in user_skills.get(uid, set())
+                ]
+                for uid in qualified[:remaining]:
+                    chosen.append(uid)
+                    chosen_set.add(uid)
+
+            for uid in candidates:
+                if len(chosen) >= required:
+                    break
+                if uid not in chosen_set:
+                    chosen.append(uid)
+                    chosen_set.add(uid)
+
+            for uid in chosen[:required]:
                 assignments.append({"user_id": uid, "day": day, "hour": hour})
                 daily_hours[uid][day] += 1
 
