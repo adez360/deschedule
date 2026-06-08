@@ -30,25 +30,22 @@ class UserSkillResponse(BaseModel):
     skill: SkillResponse
 
 
-def _validate_slots_shape(v: list[list[int]]) -> list[list[int]]:
+def _validate_slots_shape(v: list[list[bool]]) -> list[list[bool]]:
     if len(v) != 7:
         raise ValueError("slots must have exactly 7 days")
     for i, day in enumerate(v):
         if len(day) != 24:
             raise ValueError(f"day {i} must have exactly 24 hours")
-        for h, val in enumerate(day):
-            if val < 0:
-                raise ValueError(f"day {i} hour {h}: demand cannot be negative")
     return v
 
 
 class StoreSkillDemandSet(BaseModel):
     skill_id: uuid.UUID
-    slots: list[list[int]]  # [7][24] — required headcount with this skill, each >= 0
+    slots: list[list[bool]]  # [7][24] — whether this skill is needed in each slot
 
     @field_validator("slots")
     @classmethod
-    def validate_shape(cls, v: list[list[int]]) -> list[list[int]]:
+    def validate_shape(cls, v: list[list[bool]]) -> list[list[bool]]:
         return _validate_slots_shape(v)
 
 
@@ -59,6 +56,6 @@ class StoreSkillDemandResponse(BaseModel):
     store_id: uuid.UUID
     week_start: date
     skill_id: uuid.UUID
-    slots: list[list[int]]
+    slots: list[list[bool]]
     updated_at: datetime
     skill: SkillResponse

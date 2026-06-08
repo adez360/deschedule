@@ -19,7 +19,7 @@ export interface StoreSkillDemandDTO {
   store_id: string;
   week_start: string;
   skill_id: string;
-  slots: number[][]; // [7][24]
+  slots: boolean[][]; // [7][24] — true = this skill is needed in this slot
   updated_at: string;
   skill: SkillDTO;
 }
@@ -75,7 +75,7 @@ export const fetchSkillDemand = (
     .then(async r => { await check(r); return r.json(); });
 
 export const setSkillDemand = (
-  storeId: string, weekStart: string, body: { skill_id: string; slots: number[][] }, token: string,
+  storeId: string, weekStart: string, body: { skill_id: string; slots: boolean[][] }, token: string,
 ): Promise<StoreSkillDemandDTO> =>
   fetch(`${API}/api/stores/${storeId}/skill-demand/${weekStart}`, {
     method: "PUT",

@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, Copy, Trash2, ChevronLeft, ChevronRight, ChevronDown, Loader2, Maximize2, Minimize2, Layers, Wrench, PanelTop, PanelLeft, PanelRight } from "lucide-react";
+import { Save, Copy, Trash2, ChevronLeft, ChevronRight, ChevronDown, Loader2, Maximize2, Minimize2, PanelTop, PanelLeft, PanelRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
@@ -61,80 +61,95 @@ function fmtDate(d: Date) { return `${d.getMonth() + 1}/${d.getDate()}`; }
 
 // ─── DemandGrid ─────────────────────────────────────────────────────────────
 
-interface OverlaySkill { id: string; name: string; slots: number[][]; colorIdx: number; }
+type Selection = { dMin: number; dMax: number; rMin: number; rMax: number };
 
-// Bundles every "work ability" related control so the fullscreen control panel
-// can host them alongside the cell-value setter (single source of truth — see page-level state).
-interface SkillPanelData {
-  skills: SkillDTO[];
-  skillDemandMap: Map<string, number[][]>;
-  showOverlay: boolean;
-  onToggleOverlay: () => void;
-  editSkillId: string | null;
-  onSelectSkill: (id: string | null) => void;
-  editingSkill: SkillDTO | undefined;
-  editLocalSlots: number[][];
-  onEditChange: (s: number[][]) => void;
-  editLoading: boolean;
-  editDirty: boolean;
-  onSaveEdit: () => void;
-  saving: boolean;
+function emptyBoolSlots(): boolean[][] {
+  return Array.from({ length: 7 }, () => Array(24).fill(false));
 }
 
-// Work-ability layer toggle + per-skill chips — shared between the page-level panel
-// and the fullscreen control panel so both stay visually and behaviourally identical.
-function SkillControls({ panel, vertical }: { panel: SkillPanelData; vertical?: boolean }) {
+// True only if every cell in `sel` is `true` in `slots` — used to decide whether
+// a skill chip click should turn the tag on or off (toggle) for the selection.
+function allTrueInSelection(slots: boolean[][] | undefined, sel: Selection): boolean {
+  if (!slots) return false;
+  for (let d = sel.dMin; d <= sel.dMax; d++)
+    for (let r = sel.rMin; r <= sel.rMax; r++)
+      if (!slots[d][DISPLAY_HOURS[r]]) return false;
+  return true;
+}
+
+// Unified brush palette — applies to whatever range is currently selected:
+// number buttons set the headcount, skill chips toggle a work-ability tag.
+// Shared between the toolbar (top dock) and the side panel (left/right dock
+// in fullscreen) so both stay visually and behaviourally identical (IDEA-02:
+// one table, one interaction — select range, then click a brush).
+function BrushPalette({ selection, onApplyCount, skills, skillSlots, onToggleSkill, vertical }: {
+  selection: Selection | null;
+  onApplyCount: (n: number) => void;
+  skills: SkillDTO[];
+  skillSlots: Map<string, boolean[][]>;
+  onToggleSkill: (skillId: string) => void;
+  vertical?: boolean;
+}) {
   return (
     <div className={cn("flex gap-1.5", vertical ? "flex-col items-stretch" : "flex-wrap items-center")}>
-      <button
-        onClick={panel.onToggleOverlay}
-        className={cn(
-          "flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[10px] border transition-all",
-          vertical && "justify-center",
-          panel.showOverlay
-            ? "border-purple-500/50 bg-purple-600/25 text-white"
-            : "border-white/[0.15] bg-white/[0.08] text-white/60 hover:bg-white/[0.13]",
-        )}
-      >
-        <Layers className="size-3" />
-        <span className="leading-none whitespace-nowrap">工作能力 {panel.showOverlay ? "顯示中" : "已隱藏"}</span>
-      </button>
-      <div className={cn("flex gap-1", vertical ? "flex-col items-stretch" : "flex-wrap items-center")}>
-        {panel.skills.map((sk, i) => {
-          const hasData = panel.skillDemandMap.has(sk.id);
-          const c = SKILL_TAG_COLORS[i % SKILL_TAG_COLORS.length];
-          const active = panel.editSkillId === sk.id;
-          return (
-            <button key={sk.id}
-              onClick={() => panel.onSelectSkill(active ? null : sk.id)}
-              className={cn(
-                "flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] border transition-all",
-                vertical && "justify-center",
-                active
-                  ? "border-purple-500/50 bg-purple-600/20 text-white"
-                  : "border-white/10 bg-white/5 text-white/50 hover:text-white/80",
-              )}
-            >
-              <span className="size-1.5 rounded-full shrink-0" style={{ background: c.bg, boxShadow: hasData ? `0 0 0 1px ${c.text}` : undefined }} />
-              <span className="truncate">{sk.name}</span>
-            </button>
-          );
-        })}
+      <div className={cn("flex gap-1", vertical ? "flex-col" : "flex-row")}>
+        {[0, 1, 2, 3, 4, 5].map((n) => (
+          <button key={n}
+            onClick={() => selection && onApplyCount(n)}
+            disabled={!selection}
+            className={cn(
+              vertical ? "size-8" : "size-7",
+              "rounded-md text-[11px] font-bold border transition-all",
+              selection
+                ? "border-white/20 hover:border-purple-500/60 hover:scale-110 cursor-pointer"
+                : "border-white/[0.06] cursor-default opacity-30",
+            )}
+            style={{ background: DEMAND_STYLE[n].bg, color: n === 0 ? "rgba(255,255,255,0.5)" : DEMAND_STYLE[n].text }}>
+            {n}
+          </button>
+        ))}
       </div>
+      {skills.length > 0 && (
+        <>
+          <div className={vertical ? "w-full h-px bg-white/10" : "w-px h-6 bg-white/10 shrink-0"} />
+          <div className={cn("flex gap-1", vertical ? "flex-col items-stretch" : "flex-wrap items-center")}>
+            {skills.map((sk, i) => {
+              const c = SKILL_TAG_COLORS[i % SKILL_TAG_COLORS.length];
+              const active = !!selection && allTrueInSelection(skillSlots.get(sk.id), selection);
+              return (
+                <button key={sk.id}
+                  onClick={() => selection && onToggleSkill(sk.id)}
+                  disabled={!selection}
+                  className={cn(
+                    "flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] border transition-all",
+                    vertical && "justify-center",
+                    !selection
+                      ? "border-white/[0.06] text-white/20 cursor-default opacity-50"
+                      : active
+                        ? "border-purple-500/50 bg-purple-600/20 text-white"
+                        : "border-white/10 bg-white/5 text-white/50 hover:text-white/80",
+                  )}
+                >
+                  <span className="size-1.5 rounded-full shrink-0" style={{ background: c.bg, boxShadow: `0 0 0 1px ${c.text}` }} />
+                  <span className="truncate">{sk.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
-function DemandGrid({ slots, onChange, weekDates, loading, overlaySkills, showOverlay, onToggleOverlay, skillPanel, hideFullscreenButton }: {
+function DemandGrid({ slots, onChange, weekDates, loading, skills, skillSlots, onSkillChange }: {
   slots: number[][];
   onChange: (s: number[][]) => void;
   weekDates: Date[];
   loading: boolean;
-  overlaySkills?: OverlaySkill[];
-  showOverlay?: boolean;
-  onToggleOverlay?: () => void;
-  skillPanel?: SkillPanelData;
-  hideFullscreenButton?: boolean;
+  skills?: SkillDTO[];
+  skillSlots?: Map<string, boolean[][]>;
+  onSkillChange?: (skillId: string, next: boolean[][]) => void;
 }) {
   // Fullscreen — declare before any useEffect that references it
   const containerRef = useRef<HTMLDivElement>(null);
@@ -197,6 +212,19 @@ function DemandGrid({ slots, onChange, weekDates, loading, overlaySkills, showOv
     onChange(next);
     setSelection(null);
   }, [selection, onChange]);
+
+  const toggleSkillForSelection = useCallback((skillId: string) => {
+    if (!selection || !onSkillChange) return;
+    const { dMin, dMax, rMin, rMax } = selection;
+    const current = skillSlots?.get(skillId) ?? emptyBoolSlots();
+    const turnOn = !allTrueInSelection(current, selection);
+    const next = current.map((row) => [...row]);
+    for (let d = dMin; d <= dMax; d++)
+      for (let r = rMin; r <= rMax; r++)
+        next[d][DISPLAY_HOURS[r]] = turnOn;
+    onSkillChange(skillId, next);
+    setSelection(null);
+  }, [selection, skillSlots, onSkillChange]);
 
   useEffect(() => {
     const commit = () => {
@@ -265,24 +293,16 @@ function DemandGrid({ slots, onChange, weekDates, loading, overlaySkills, showOv
             style={{ background: "rgba(13,13,26,0.95)", backdropFilter: "blur(12px)", maxHeight: "calc(100dvh - 5rem)", overflowY: "auto" }}
           >
             <span className={cn("text-[10px] text-center leading-tight transition-colors", selection ? "text-indigo-300/80" : "text-white/25")}>
-              {selection ? `已選\n${selCellCount} 格` : "選取格子\n設定人數"}
+              {selection ? `已選\n${selCellCount} 格` : "選取格子\n設定內容"}
             </span>
-            <div className="flex flex-col gap-1.5">
-              {[0, 1, 2, 3, 4, 5].map((n) => (
-                <button key={n}
-                  onClick={() => selection && applySelection(n)}
-                  disabled={!selection}
-                  className={cn(
-                    "size-8 rounded-md text-[11px] font-bold border transition-all",
-                    selection
-                      ? "border-white/20 hover:border-purple-500/60 hover:scale-110 cursor-pointer"
-                      : "border-white/[0.06] cursor-default opacity-30",
-                  )}
-                  style={{ background: DEMAND_STYLE[n].bg, color: n === 0 ? "rgba(255,255,255,0.5)" : DEMAND_STYLE[n].text }}>
-                  {n}
-                </button>
-              ))}
-            </div>
+            <BrushPalette
+              selection={selection}
+              onApplyCount={applySelection}
+              skills={skills ?? []}
+              skillSlots={skillSlots ?? new Map()}
+              onToggleSkill={toggleSkillForSelection}
+              vertical
+            />
             <button
               onClick={() => setSelection(null)}
               className={cn(
@@ -292,56 +312,6 @@ function DemandGrid({ slots, onChange, weekDates, loading, overlaySkills, showOv
             >
               ✕
             </button>
-
-            {/* Work-ability controls — unified into the same panel so nothing lives outside it in fullscreen */}
-            {skillPanel && skillPanel.skills.length > 0 && (
-              <>
-                <div className="w-full h-px bg-white/10" />
-                <SkillControls panel={skillPanel} vertical />
-              </>
-            )}
-          </div>
-        )}
-
-        {/* Fullscreen-only: per-skill sub-demand editor — rendered inline (not a portal) so it
-            stays visible inside the fullscreen element; opened via the chips in the control panel */}
-        {isFullscreen && skillPanel?.editSkillId && skillPanel.editingSkill && (
-          <div
-            className="absolute inset-4 sm:inset-10 z-40 rounded-2xl border border-white/15 flex flex-col overflow-hidden"
-            style={{ background: "rgba(13,13,26,0.98)", backdropFilter: "blur(16px)" }}
-          >
-            <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-white/10 shrink-0">
-              <p className="text-xs text-white/50">
-                編輯「<span className="text-white/80 font-medium">{skillPanel.editingSkill.name}</span>」子需求人數
-              </p>
-              <div className="flex items-center gap-2">
-                <Button
-                  className="gap-2 border-0 text-white hover:opacity-90 h-8 text-xs"
-                  style={{ background: "linear-gradient(135deg,#7C3AED,#6D28D9)" }}
-                  onClick={skillPanel.onSaveEdit}
-                  disabled={skillPanel.saving || !skillPanel.editDirty}
-                >
-                  {skillPanel.saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
-                  {skillPanel.editDirty ? "儲存子需求" : "已儲存"}
-                </Button>
-                <button
-                  onClick={() => skillPanel.onSelectSkill(null)}
-                  className="size-7 flex items-center justify-center rounded text-white/40 hover:text-white/80 hover:bg-white/10 transition-colors"
-                  aria-label="關閉編輯"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 overflow-auto p-3">
-              <DemandGrid
-                slots={skillPanel.editLocalSlots}
-                onChange={skillPanel.onEditChange}
-                weekDates={weekDates}
-                loading={skillPanel.editLoading}
-                hideFullscreenButton
-              />
-            </div>
           </div>
         )}
 
@@ -395,26 +365,20 @@ function DemandGrid({ slots, onChange, weekDates, loading, overlaySkills, showOv
             {/* Sticky day header — fullscreen button replaces the "時段" label */}
             <div className="grid sticky top-0 z-10 border-b border-white/10 bg-[rgba(13,13,26,0.95)] backdrop-blur-sm"
               style={{ gridTemplateColumns: "2.5rem repeat(7, minmax(40px, 1fr)) 0.75rem" }}>
-              {hideFullscreenButton ? (
-                <div className="flex items-center justify-center px-1.5 py-1.5 text-white/20">
-                  <Wrench className="size-3" />
-                </div>
-              ) : (
-                <button
-                  onClick={toggleFullscreen}
-                  className={cn(
-                    "flex items-center justify-center gap-1 px-1.5 py-1.5 transition-all",
-                    isFullscreen
-                      ? "rounded-md bg-white/[0.08] border border-white/[0.15] text-white/65 hover:bg-white/[0.13]"
-                      : "rounded-md rounded-tl-2xl bg-purple-600/20 border border-purple-500/30 text-purple-300 hover:bg-purple-600/32 hover:text-purple-200",
-                  )}
-                  aria-label={isFullscreen ? "退出全螢幕" : "全螢幕"}
-                >
-                  {isFullscreen
-                    ? <><Minimize2 className="size-3" /><span className="text-[9px] leading-none">縮小</span></>
-                    : <><Maximize2 className="size-3" /><span className="text-[9px] leading-none">全螢</span></>}
-                </button>
-              )}
+              <button
+                onClick={toggleFullscreen}
+                className={cn(
+                  "flex items-center justify-center gap-1 px-1.5 py-1.5 transition-all",
+                  isFullscreen
+                    ? "rounded-md bg-white/[0.08] border border-white/[0.15] text-white/65 hover:bg-white/[0.13]"
+                    : "rounded-md rounded-tl-2xl bg-purple-600/20 border border-purple-500/30 text-purple-300 hover:bg-purple-600/32 hover:text-purple-200",
+                )}
+                aria-label={isFullscreen ? "退出全螢幕" : "全螢幕"}
+              >
+                {isFullscreen
+                  ? <><Minimize2 className="size-3" /><span className="text-[9px] leading-none">縮小</span></>
+                  : <><Maximize2 className="size-3" /><span className="text-[9px] leading-none">全螢</span></>}
+              </button>
               {DAYS.map((d, i) => (
                 <div key={d} className="py-3 text-center border-r border-white/[0.06] last:border-r-0">
                   <div className="text-xs font-medium text-white/70">{d}</div>
@@ -438,25 +402,16 @@ function DemandGrid({ slots, onChange, weekDates, loading, overlaySkills, showOv
                 </span>
                 {/* Desktop: full descriptive text */}
                 <span className="hidden sm:inline">
-                  {selection ? `已選 ${selCellCount} 格，設定人數：` : "點選或拖曳格子後設定人數："}
+                  {selection ? `已選 ${selCellCount} 格，設定：` : "點選或拖曳格子後設定人數／工作能力："}
                 </span>
               </span>
-              <div className="flex gap-1">
-                {[0, 1, 2, 3, 4, 5].map((n) => (
-                  <button key={n}
-                    onClick={() => selection && applySelection(n)}
-                    disabled={!selection}
-                    className={cn(
-                      "size-7 rounded-md text-[11px] font-bold border transition-all",
-                      selection
-                        ? "border-white/20 hover:border-purple-500/60 hover:scale-110 cursor-pointer"
-                        : "border-white/[0.06] cursor-default opacity-30",
-                    )}
-                    style={{ background: DEMAND_STYLE[n].bg, color: n === 0 ? "rgba(255,255,255,0.5)" : DEMAND_STYLE[n].text }}>
-                    {n}
-                  </button>
-                ))}
-              </div>
+              <BrushPalette
+                selection={selection}
+                onApplyCount={applySelection}
+                skills={skills ?? []}
+                skillSlots={skillSlots ?? new Map()}
+                onToggleSkill={toggleSkillForSelection}
+              />
               {/* Always rendered (invisible when no selection) to keep toolbar height stable */}
               <button
                 onClick={() => setSelection(null)}
@@ -467,14 +422,6 @@ function DemandGrid({ slots, onChange, weekDates, loading, overlaySkills, showOv
               >
                 ✕
               </button>
-
-              {/* Work-ability controls — folded into the same panel while in fullscreen */}
-              {isFullscreen && skillPanel && skillPanel.skills.length > 0 && (
-                <>
-                  <div className="w-px h-6 bg-white/10 shrink-0" />
-                  <SkillControls panel={skillPanel} />
-                </>
-              )}
             </div>
 
             {/* Rows */}
@@ -501,6 +448,7 @@ function DemandGrid({ slots, onChange, weekDates, loading, overlaySkills, showOv
                         const inPrev = preview && day >= preview.dMin && day <= preview.dMax && rowIdx >= preview.rMin && rowIdx <= preview.rMax;
                         const inSel  = selection && day >= selection.dMin && day <= selection.dMax && rowIdx >= selection.rMin && rowIdx <= selection.rMax;
                         const s = DEMAND_STYLE[Math.min(v, MAX_DEMAND)];
+                        const taggedSkills = (skills ?? []).filter((sk) => skillSlots?.get(sk.id)?.[day]?.[hour]);
                         const bgStyle = inPrev
                           ? { background: "rgba(99,102,241,0.30)", outline: "1px solid rgba(139,92,246,0.6)" }
                           : inSel
@@ -520,25 +468,22 @@ function DemandGrid({ slots, onChange, weekDates, loading, overlaySkills, showOv
                                 tick();
                               }}
                               role="button"
-                              aria-label={`${DAYS[day]}曜 ${pad2(hour)}:00 需求 ${v} 人`}
+                              aria-label={`${DAYS[day]}曜 ${pad2(hour)}:00 需求 ${v} 人${taggedSkills.length ? `，需要：${taggedSkills.map(sk => sk.name).join("、")}` : ""}`}
                             >
                               <span style={{ color: inPrev || inSel ? "rgba(255,255,255,0.7)" : s.text }}>{v > 0 ? v : ""}</span>
-                              {showOverlay && overlaySkills && overlaySkills.length > 0 && (
-                                <div className="pointer-events-none absolute bottom-0 right-0 flex flex-wrap-reverse justify-end gap-[1px] p-[1px] max-w-full">
-                                  {overlaySkills
-                                    .filter(sk => sk.slots[day][hour] > 0)
-                                    .map(sk => {
-                                      const c = SKILL_TAG_COLORS[sk.colorIdx % SKILL_TAG_COLORS.length];
-                                      return (
-                                        <span key={sk.id}
-                                          className="text-[7px] leading-none px-[3px] py-[1px] rounded-sm font-bold whitespace-nowrap"
-                                          style={{ background: c.bg, color: c.text }}
-                                          title={`${sk.name}：${sk.slots[day][hour]} 人`}
-                                        >
-                                          {sk.name.slice(0, 1)}
-                                        </span>
-                                      );
-                                    })}
+                              {taggedSkills.length > 0 && (
+                                <div className="pointer-events-none absolute bottom-[3px] right-[3px] flex gap-[2px]">
+                                  {taggedSkills.map((sk) => {
+                                    const idx = (skills ?? []).findIndex((s2) => s2.id === sk.id);
+                                    const c = SKILL_TAG_COLORS[idx % SKILL_TAG_COLORS.length];
+                                    return (
+                                      <span key={sk.id}
+                                        className="size-[5px] rounded-full"
+                                        style={{ background: c.bg, boxShadow: `0 0 0 1px ${c.text}` }}
+                                        title={sk.name}
+                                      />
+                                    );
+                                  })}
                                 </div>
                               )}
                             </div>
@@ -659,10 +604,8 @@ export default function DemandPage() {
   const [weekStart, setWeekStart] = useState(() => getMondayOfWeek(new Date()));
   const [localSlots, setLocalSlots] = useState<number[][]>(emptySlots);
   const [isDirty, setIsDirty] = useState(false);
-  const [showOverlay, setShowOverlay] = useState(false);
-  const [editSkillId, setEditSkillId] = useState<string | null>(null);
-  const [skillLocalSlots, setSkillLocalSlots] = useState<number[][]>(emptySlots);
-  const [skillDirty, setSkillDirty] = useState(false);
+  const [skillLocalMap, setSkillLocalMap] = useState<Map<string, boolean[][]>>(new Map());
+  const [dirtySkillIds, setDirtySkillIds] = useState<Set<string>>(new Set());
   const qc = useQueryClient();
 
   const weekStartStr = toLocalDateStr(weekStart);
@@ -706,19 +649,13 @@ export default function DemandPage() {
     setIsDirty(true);
   }, []);
 
-  const saveMut = useMutation({
-    mutationFn: () => saveDemand(storeId, weekStartStr, localSlots, token),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["demand", storeId, weekStartStr] }); setIsDirty(false); toast.success("人力需求已儲存"); },
-    onError: (e: Error) => toast.error(`儲存失敗：${e.message}`),
-  });
-
   const copyMut = useMutation({
     mutationFn: () => copyDemandFromWeek(storeId, weekStartStr, prevWeekStr, token),
     onSuccess: (data) => { setLocalSlots(data.slots.map((r) => [...r])); setIsDirty(false); qc.invalidateQueries({ queryKey: ["demand", storeId, weekStartStr] }); toast.success("已從上週複製"); },
     onError: (e: Error) => toast.error(`複製失敗：${e.message}`),
   });
 
-  // ── Skill sub-demand overlay ─────────────────────────────────────────────
+  // ── Work-ability tags (IDEA-02: same table, same brush as headcount) ──────
 
   const { data: orgSkills = [] } = useQuery({
     queryKey: ["orgSkills", orgId],
@@ -726,50 +663,50 @@ export default function DemandPage() {
     enabled: !!orgId && !!token,
   });
 
-  const { data: skillDemands = [], isLoading: skillDemandLoading } = useQuery({
+  const { data: skillDemands = [] } = useQuery({
     queryKey: ["skillDemand", storeId, weekStartStr],
     queryFn: () => fetchSkillDemand(storeId, weekStartStr, token),
     enabled: !!storeId && !!token,
   });
 
-  const skillDemandMap = useMemo(() => {
-    const m = new Map<string, number[][]>();
-    for (const sd of skillDemands) m.set(sd.skill_id, sd.slots);
-    return m;
-  }, [skillDemands]);
-
-  const overlaySkills: OverlaySkill[] = useMemo(() =>
-    orgSkills.map((sk, i) => ({
-      id: sk.id,
-      name: sk.name,
-      slots: skillDemandMap.get(sk.id) ?? emptySlots(),
-      colorIdx: i,
-    })).filter(sk => skillDemandMap.has(sk.id)),
-  [orgSkills, skillDemandMap]);
-
-  // Sync the editor's local slots when the selected skill or its server data changes
+  // Local working copy of every skill's boolean grid, synced from the server
+  // whenever the skill list or this week's tags change (mirrors localSlots).
   useEffect(() => {
-    if (!editSkillId) return;
-    const existing = skillDemandMap.get(editSkillId);
-    setSkillLocalSlots(existing ? existing.map(r => [...r]) : emptySlots());
-    setSkillDirty(false);
-  }, [editSkillId, skillDemandMap]);
+    const m = new Map<string, boolean[][]>();
+    for (const sk of orgSkills) {
+      const existing = skillDemands.find((sd) => sd.skill_id === sk.id);
+      m.set(sk.id, existing ? existing.slots.map((r) => [...r]) : emptyBoolSlots());
+    }
+    setSkillLocalMap(m);
+    setDirtySkillIds(new Set());
+  }, [orgSkills, skillDemands]);
 
-  const handleSkillChange = useCallback((next: number[][]) => { setSkillLocalSlots(next); setSkillDirty(true); }, []);
+  const handleSkillChange = useCallback((skillId: string, next: boolean[][]) => {
+    setSkillLocalMap((prev) => { const m = new Map(prev); m.set(skillId, next); return m; });
+    setDirtySkillIds((prev) => new Set(prev).add(skillId));
+  }, []);
 
-  const saveSkillDemandMut = useMutation({
-    mutationFn: () => setSkillDemand(storeId, weekStartStr, { skill_id: editSkillId!, slots: skillLocalSlots }, token),
+  const saveAllMut = useMutation({
+    mutationFn: async () => {
+      const tasks: Promise<unknown>[] = [];
+      if (isDirty) tasks.push(saveDemand(storeId, weekStartStr, localSlots, token));
+      for (const skillId of dirtySkillIds) {
+        const slots = skillLocalMap.get(skillId);
+        if (slots) tasks.push(setSkillDemand(storeId, weekStartStr, { skill_id: skillId, slots }, token));
+      }
+      await Promise.all(tasks);
+    },
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["demand", storeId, weekStartStr] });
       qc.invalidateQueries({ queryKey: ["skillDemand", storeId, weekStartStr] });
-      setSkillDirty(false);
-      toast.success("技能子需求已儲存");
+      setIsDirty(false);
+      setDirtySkillIds(new Set());
+      toast.success("已儲存");
     },
     onError: (e: Error) => toast.error(`儲存失敗：${e.message}`),
   });
 
-  const editingSkill = orgSkills.find(s => s.id === editSkillId);
-
-  const isMutating = saveMut.isPending || copyMut.isPending;
+  const isMutating = saveAllMut.isPending || copyMut.isPending;
 
   return (
     <div className="space-y-6">
@@ -797,103 +734,22 @@ export default function DemandPage() {
 
       <QuickPreset onApply={handlePreset} />
 
-      {/* Skill overlay toggle + per-skill editor */}
-      {orgSkills.length > 0 && (
-        <div className="rounded-2xl border border-white/10 overflow-hidden" style={{ background: "rgba(255,255,255,0.03)" }}>
-          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-            <button
-              onClick={() => setShowOverlay(v => !v)}
-              className={cn(
-                "flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm border transition-all",
-                showOverlay
-                  ? "border-purple-500/50 bg-purple-600/20 text-white"
-                  : "border-white/10 bg-white/5 text-white/40 hover:bg-white/8 hover:text-white/70",
-              )}
-            >
-              <Layers className="size-3.5" />
-              工作能力
-              <span className="text-[10px] opacity-60">{showOverlay ? "顯示中" : "已隱藏"}</span>
-            </button>
-
-            <div className="flex flex-wrap items-center gap-1.5">
-              <Wrench className="size-3.5 text-white/30" />
-              {orgSkills.map(sk => {
-                const hasData = skillDemandMap.has(sk.id);
-                const colorIdx = orgSkills.findIndex(s => s.id === sk.id);
-                const c = SKILL_TAG_COLORS[colorIdx % SKILL_TAG_COLORS.length];
-                const active = editSkillId === sk.id;
-                return (
-                  <button key={sk.id}
-                    onClick={() => setEditSkillId(active ? null : sk.id)}
-                    className={cn(
-                      "flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs border transition-all",
-                      active
-                        ? "border-purple-500/50 bg-purple-600/20 text-white"
-                        : "border-white/10 bg-white/5 text-white/50 hover:text-white/80",
-                    )}
-                  >
-                    <span className="size-2 rounded-full" style={{ background: c.bg, boxShadow: hasData ? `0 0 0 1px ${c.text}` : undefined }} />
-                    {sk.name}
-                    {!hasData && <span className="text-[9px] text-white/25">未設定</span>}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {editSkillId && editingSkill && (
-            <div className="border-t border-white/10 p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <p className="text-xs text-white/40">
-                  編輯「<span className="text-white/70">{editingSkill.name}</span>」子需求人數 — 表示總需求中至少需要這麼多人具備此技能
-                </p>
-                <Button
-                  className="gap-2 border-0 text-white hover:opacity-90 h-8 text-xs"
-                  style={{ background: "linear-gradient(135deg,#7C3AED,#6D28D9)" }}
-                  onClick={() => saveSkillDemandMut.mutate()}
-                  disabled={saveSkillDemandMut.isPending || !skillDirty}
-                >
-                  {saveSkillDemandMut.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
-                  {skillDirty ? "儲存子需求" : "已儲存"}
-                </Button>
-              </div>
-              <DemandGrid slots={skillLocalSlots} onChange={handleSkillChange} weekDates={weekDates} loading={skillDemandLoading} />
-            </div>
-          )}
-        </div>
-      )}
-
       <DemandGrid
         slots={localSlots}
         onChange={handleChange}
         weekDates={weekDates}
         loading={isLoading}
-        overlaySkills={overlaySkills}
-        showOverlay={showOverlay}
-        onToggleOverlay={() => setShowOverlay(v => !v)}
-        skillPanel={orgSkills.length > 0 ? {
-          skills: orgSkills,
-          skillDemandMap,
-          showOverlay,
-          onToggleOverlay: () => setShowOverlay(v => !v),
-          editSkillId,
-          onSelectSkill: setEditSkillId,
-          editingSkill,
-          editLocalSlots: skillLocalSlots,
-          onEditChange: handleSkillChange,
-          editLoading: skillDemandLoading,
-          editDirty: skillDirty,
-          onSaveEdit: () => saveSkillDemandMut.mutate(),
-          saving: saveSkillDemandMut.isPending,
-        } : undefined}
+        skills={orgSkills}
+        skillSlots={skillLocalMap}
+        onSkillChange={handleSkillChange}
       />
 
       <div className="flex flex-wrap items-center gap-2">
         <Button className="gap-2 border-0 text-white hover:opacity-90"
           style={{ background: "linear-gradient(135deg,#7C3AED,#6D28D9)", boxShadow: "0 2px 16px rgba(124,58,237,0.3)" }}
-          onClick={() => saveMut.mutate()} disabled={isMutating || !isDirty}>
-          {saveMut.isPending ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-          {isDirty ? "儲存變更" : "已儲存"}
+          onClick={() => saveAllMut.mutate()} disabled={isMutating || (!isDirty && dirtySkillIds.size === 0)}>
+          {saveAllMut.isPending ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+          {(isDirty || dirtySkillIds.size > 0) ? "儲存變更" : "已儲存"}
         </Button>
         <Button variant="outline" className="gap-2 border-white/10 text-white/60 hover:bg-white/5 hover:text-white" onClick={() => copyMut.mutate()} disabled={isMutating}>
           {copyMut.isPending ? <Loader2 className="size-4 animate-spin" /> : <Copy className="size-4" />}從上週複製

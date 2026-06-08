@@ -63,7 +63,7 @@ class StoreSkillDemand(Base):
     skill_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("skills.id"), nullable=False
     )
-    slots: Mapped[Any] = mapped_column(JSONB, nullable=False)  # int[7][24]
+    slots: Mapped[Any] = mapped_column(JSONB, nullable=False)  # bool[7][24]
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

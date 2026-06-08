@@ -61,7 +61,7 @@ async def load_inputs(
             StoreSkillDemand.week_start == week_start,
         )
     )
-    skill_demand_slots: dict[uuid.UUID, list[list[int]]] = {
+    skill_demand_slots: dict[uuid.UUID, list[list[bool]]] = {
         sd.skill_id: sd.slots for sd in skill_demand_result.scalars().all()
     }
 
@@ -119,17 +119,18 @@ def run_greedy(
     demand_slots: list[list[int]],
     avail_slots: dict[uuid.UUID, list[list[bool]]],
     pref_weights: dict[uuid.UUID, float],
-    skill_demand_slots: dict[uuid.UUID, list[list[int]]] | None = None,
+    skill_demand_slots: dict[uuid.UUID, list[list[bool]]] | None = None,
     user_skills: dict[uuid.UUID, set[uuid.UUID]] | None = None,
 ) -> list[dict]:
     """
     Pure function — no I/O. Iterates slots day-by-hour, picks the highest-preference
     available employees up to the required headcount.
 
-    If skill_demand_slots is provided, it expresses sub-quotas within the total
-    headcount (e.g. "of these 3 people, at least 1 must have skill X") — those
-    quotas are filled first (best-effort; an under-staffed slot still fills with
-    whoever is available), then the remaining headcount with any candidate.
+    If skill_demand_slots is provided, it expresses tag-based coverage constraints
+    within the total headcount (e.g. "if true, at least one assigned person should
+    have skill X") — those constraints are honored first (best-effort; an
+    under-staffed or under-qualified slot still fills with whoever is available),
+    then the remaining headcount with any candidate.
 
     Returns list of {"user_id", "day", "hour"}.
     """
@@ -158,20 +159,18 @@ def run_greedy(
             chosen_set: set[uuid.UUID] = set()
 
             for skill_id, slots in skill_demand_slots.items():
-                need = slots[day][hour]
-                if need <= 0:
+                if not slots[day][hour]:
                     continue
-                already = sum(1 for uid in chosen if skill_id in user_skills.get(uid, set()))
-                remaining = need - already
-                if remaining <= 0:
+                has_one = any(skill_id in user_skills.get(uid, set()) for uid in chosen)
+                if has_one:
                     continue
                 qualified = [
                     uid for uid in candidates
                     if uid not in chosen_set and skill_id in user_skills.get(uid, set())
                 ]
-                for uid in qualified[:remaining]:
-                    chosen.append(uid)
-                    chosen_set.add(uid)
+                if qualified:
+                    chosen.append(qualified[0])
+                    chosen_set.add(qualified[0])
 
             for uid in candidates:
                 if len(chosen) >= required:
