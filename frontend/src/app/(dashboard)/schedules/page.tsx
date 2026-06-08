@@ -4,18 +4,13 @@ import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
-  DndContext, DragOverlay, useDraggable, useDroppable,
-  useSensor, useSensors, PointerSensor, TouchSensor,
-  type DragEndEvent, type DragStartEvent,
-} from "@dnd-kit/core";
-import {
   ChevronLeft, ChevronRight, Zap, Send, Archive, CalendarDays, Copy, Check,
-  Loader2, Maximize2, Minimize2, Trash2, Undo2, GripVertical,
+  Loader2, Maximize2, Minimize2, Trash2, Undo2, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -353,68 +348,33 @@ function CoverageHeatmap({ actual, weekDates, loading, isFullscreen }: {
   );
 }
 
-// ─── ManualEditView (drag-and-drop) ────────────────────────────────────────
-
-type DragItemData =
-  | { kind: "employee"; userId: string }
-  | { kind: "assignment"; assignment: AssignmentDTO };
-
-type DropTargetData =
-  | { kind: "cell"; day: number; hour: number }
-  | { kind: "trash" };
+// ─── ManualEditView (range-select → assign whole shift) ────────────────────
 
 type UndoOp = { label: string; inverse: () => Promise<void> };
+type Selection = { day: number; rMin: number; rMax: number };
+type DragState = { active: boolean; day: number; origin: number; end: number };
 
 const EDIT_HOURS = Array.from({ length: 24 }, (_, i) => (i + 7) % 24);
 
-function DraggableEmployeeCard({ user, color, hours }: {
-  user: UserDTO;
-  color: { bg: string; border: string };
-  hours: number;
-}) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: `employee-${user.id}`,
-    data: { kind: "employee", userId: user.id } satisfies DragItemData,
-  });
-  return (
-    <div
-      ref={setNodeRef}
-      {...listeners}
-      {...attributes}
-      style={{ touchAction: "none", opacity: isDragging ? 0.35 : 1 }}
-      className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 cursor-grab active:cursor-grabbing hover:bg-white/[0.08] transition-colors select-none"
-    >
-      <GripVertical className="size-3.5 text-white/20 flex-shrink-0" />
-      <div className="size-7 rounded-full flex items-center justify-center text-xs font-semibold text-white flex-shrink-0"
-        style={{ background: color.bg, border: `1px solid ${color.border}` }}>
-        {user.name[0]}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="text-sm text-white truncate">{user.name}</div>
-        <div className="text-[10px] text-white/35">本週 {hours}h</div>
-      </div>
-    </div>
-  );
+/** Format a row-index range into a human-readable "HH:00–HH:00（共 N 小時）" label. */
+function rangeLabel(rMin: number, rMax: number) {
+  const startHour = EDIT_HOURS[rMin];
+  const endHour = (EDIT_HOURS[rMax] + 1) % 24;
+  const count = rMax - rMin + 1;
+  return `${pad2(startHour)}:00–${pad2(endHour)}:00（共 ${count} 小時）`;
 }
 
-function DraggableChip({ assignment, color, name }: {
+function ShiftChip({ assignment, color, name }: {
   assignment: AssignmentDTO;
   color: { bg: string; border: string };
   name: string;
 }) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: `assignment-${assignment.id}`,
-    data: { kind: "assignment", assignment } satisfies DragItemData,
-  });
   return (
     <Tooltip>
       <TooltipTrigger>
         <div
-          ref={setNodeRef}
-          {...listeners}
-          {...attributes}
-          style={{ background: color.bg, border: `1px solid ${color.border}`, touchAction: "none", opacity: isDragging ? 0.3 : 1 }}
-          className="size-5 rounded-full flex items-center justify-center text-[9px] font-semibold text-white cursor-grab active:cursor-grabbing select-none"
+          style={{ background: color.bg, border: `1px solid ${color.border}` }}
+          className="size-5 rounded-full flex items-center justify-center text-[9px] font-semibold text-white select-none"
         >
           {name[0]}
         </div>
@@ -423,46 +383,6 @@ function DraggableChip({ assignment, color, name }: {
         {name}{assignment.is_manual && " · 手動排班"}
       </TooltipContent>
     </Tooltip>
-  );
-}
-
-function DroppableCell({ day, hour, children }: {
-  day: number;
-  hour: number;
-  children: React.ReactNode;
-}) {
-  const { setNodeRef, isOver } = useDroppable({
-    id: `cell-${day}-${hour}`,
-    data: { kind: "cell", day, hour } satisfies DropTargetData,
-  });
-  return (
-    <div
-      ref={setNodeRef}
-      className={cn(
-        "border-r border-b border-white/[0.05] last:border-r-0 min-h-9 p-1 flex flex-wrap content-start gap-1 transition-colors",
-        isOver && "bg-purple-500/15 ring-1 ring-inset ring-purple-400/50",
-      )}
-    >
-      {children}
-    </div>
-  );
-}
-
-function DroppableTrash() {
-  const { setNodeRef, isOver } = useDroppable({
-    id: "trash",
-    data: { kind: "trash" } satisfies DropTargetData,
-  });
-  return (
-    <div
-      ref={setNodeRef}
-      className={cn(
-        "flex items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-3 text-xs transition-colors",
-        isOver ? "border-red-400/60 bg-red-500/10 text-red-300" : "border-white/15 text-white/30",
-      )}
-    >
-      <Trash2 className="size-3.5" /> 拖曳到此處移除排班
-    </div>
   );
 }
 
@@ -479,14 +399,21 @@ function ManualEditView({
   isFullscreen: boolean;
   disabled: boolean;
 }) {
-  const [activeDrag, setActiveDrag] = useState<DragItemData | null>(null);
-  const [undoStack, setUndoStack] = useState<UndoOp[]>([]);
-  const [pending, setPending] = useState(false);
+  const drag = useRef<DragState>({ active: false, day: 0, origin: 0, end: 0 });
+  const [, setSeed] = useState(0);
+  const rafRef = useRef(0);
+  const tick = useCallback(() => {
+    cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => setSeed((n) => n + 1));
+  }, []);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 6 } }),
-  );
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [confirmingClear, setConfirmingClear] = useState(false);
+  const [pickedEmployeeId, setPickedEmployeeId] = useState("");
+  const [undoStack, setUndoStack] = useState<UndoOp[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const sensorsContainerStyle = { touchAction: "pan-x pan-y" } as const;
 
   const colorOf = useCallback(
     (userId: string) => {
@@ -521,9 +448,9 @@ function ManualEditView({
 
   const handleUndo = useCallback(async () => {
     const last = undoStack[undoStack.length - 1];
-    if (!last || pending) return;
+    if (!last || busy) return;
     setUndoStack((s) => s.slice(0, -1));
-    setPending(true);
+    setBusy(true);
     try {
       await last.inverse();
       invalidate();
@@ -531,13 +458,70 @@ function ManualEditView({
     } catch (e) {
       toast.error(`復原失敗：${(e as Error).message}`);
     } finally {
-      setPending(false);
+      setBusy(false);
     }
-  }, [undoStack, pending, invalidate]);
+  }, [undoStack, busy, invalidate]);
+
+  // ── Drag-to-select a contiguous hour range within a single day column ─────
+  const beginSelect = useCallback((day: number, row: number) => {
+    setSelection(null);
+    setConfirmingClear(false);
+    setPickedEmployeeId("");
+    drag.current = { active: true, day, origin: row, end: row };
+    tick();
+  }, [tick]);
+
+  useEffect(() => {
+    const commit = () => {
+      if (!drag.current.active) return;
+      cancelAnimationFrame(rafRef.current);
+      const { day, origin, end } = drag.current;
+      drag.current.active = false;
+      setSelection({ day, rMin: Math.min(origin, end), rMax: Math.max(origin, end) });
+      setSeed((n) => n + 1);
+    };
+    window.addEventListener("pointerup", commit);
+    return () => window.removeEventListener("pointerup", commit);
+  }, []);
+
+  const preview = (() => {
+    if (!drag.current.active) return null;
+    const { day, origin, end } = drag.current;
+    return { day, rMin: Math.min(origin, end), rMax: Math.max(origin, end) };
+  })();
+
+  // Cells (day, hour) covered by the committed selection, and any existing
+  // assignments occupying them.
+  const selectedCells = useMemo(() => {
+    if (!selection) return [];
+    const cells: { day: number; hour: number }[] = [];
+    for (let r = selection.rMin; r <= selection.rMax; r++) {
+      cells.push({ day: selection.day, hour: EDIT_HOURS[r] });
+    }
+    return cells;
+  }, [selection]);
+
+  const occupying = useMemo(() => {
+    if (selectedCells.length === 0) return [];
+    const set = new Set(selectedCells.map((c) => `${c.day}-${c.hour}`));
+    return assignments.filter((a) => set.has(`${a.day}-${a.hour}`));
+  }, [selectedCells, assignments]);
+
+  const occupyingByUser = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const a of occupying) m.set(a.user_id, (m.get(a.user_id) ?? 0) + 1);
+    return [...m.entries()];
+  }, [occupying]);
+
+  const clearSelection = useCallback(() => {
+    setSelection(null);
+    setConfirmingClear(false);
+    setPickedEmployeeId("");
+  }, []);
 
   // Best-effort availability check — silently skipped if the manager lacks
-  // `employee.availability.edit` (still allows the drop, just no warning).
-  const checkUnavailable = useCallback(async (userId: string, day: number, hour: number) => {
+  // `employee.availability.edit` (assignment still proceeds, just no warning).
+  const checkAnyUnavailable = useCallback(async (userId: string, cells: { day: number; hour: number }[]) => {
     try {
       const data = await queryClient.fetchQuery({
         queryKey: ["userAvailabilityForSchedule", userId, weekStartStr],
@@ -545,103 +529,66 @@ function ManualEditView({
         staleTime: 5 * 60_000,
       });
       const slots = data?.[0]?.slots;
-      return !!slots && slots[day]?.[hour] === false;
+      if (!slots) return false;
+      return cells.some((c) => slots[c.day]?.[c.hour] === false);
     } catch {
       return false;
     }
   }, [queryClient, weekStartStr, token]);
 
-  const handleDragStart = useCallback((event: DragStartEvent) => {
-    setActiveDrag((event.active.data.current as DragItemData) ?? null);
-  }, []);
-
-  const handleDragEnd = useCallback(async (event: DragEndEvent) => {
-    setActiveDrag(null);
-    const { active, over } = event;
-    if (!over || !scheduleId) return;
-    const activeData = active.data.current as DragItemData | undefined;
-    const overData = over.data.current as DropTargetData | undefined;
-    if (!activeData || !overData) return;
-
-    // ── Drop on trash → remove assignment ──────────────────────────────────
-    if (overData.kind === "trash") {
-      if (activeData.kind !== "assignment") return;
-      const a = activeData.assignment;
-      setPending(true);
-      try {
-        await deleteAssignment(scheduleId, a.id, token);
-        pushUndo(`移除 ${nameOf(a.user_id)} · ${DAYS[a.day]} ${pad2(a.hour)}:00`, async () => {
-          await createAssignment(scheduleId, a.user_id, a.day, a.hour, token);
-        });
-        invalidate();
-        toast.success("已移除排班");
-      } catch (e) {
-        toast.error(`移除失敗：${(e as Error).message}`);
-      } finally {
-        setPending(false);
+  const handleAssign = useCallback(async () => {
+    if (!selection || !scheduleId || !pickedEmployeeId || busy || selectedCells.length === 0) return;
+    const userId = pickedEmployeeId;
+    const cells = selectedCells;
+    const label = `指派 ${nameOf(userId)} · ${DAYS[selection.day]} ${rangeLabel(selection.rMin, selection.rMax)}`;
+    setBusy(true);
+    try {
+      const unavailable = await checkAnyUnavailable(userId, cells);
+      const created: AssignmentDTO[] = [];
+      for (const c of cells) {
+        created.push(await createAssignment(scheduleId, userId, c.day, c.hour, token));
       }
-      return;
+      pushUndo(label, async () => {
+        // Re-resolve current IDs at undo-time: an intervening clear+undo cycle
+        // would have deleted and recreated these rows under new IDs.
+        const detail = await fetchScheduleDetail(scheduleId, token);
+        const set = new Set(cells.map((c) => `${c.day}-${c.hour}`));
+        const current = detail.assignments.filter((a) => a.user_id === userId && set.has(`${a.day}-${a.hour}`));
+        for (const a of current) await deleteAssignment(scheduleId, a.id, token);
+      });
+      invalidate();
+      clearSelection();
+      if (unavailable) {
+        toast.warning(`已建立 ${created.length} 筆指派，但部分時段 ${nameOf(userId)} 標記為不可用（已強制排班）`);
+      } else {
+        toast.success(`已建立 ${created.length} 筆指派（整段班次）`);
+      }
+    } catch (e) {
+      toast.error(`指派失敗：${(e as Error).message}`);
+    } finally {
+      setBusy(false);
     }
+  }, [selection, scheduleId, pickedEmployeeId, busy, selectedCells, nameOf, checkAnyUnavailable, token, pushUndo, invalidate, clearSelection]);
 
-    const { day, hour } = overData;
-
-    // ── Drop on a cell ───────────────────────────────────────────────────────
-    if (activeData.kind === "employee") {
-      const userId = activeData.userId;
-      if (assignments.some((x) => x.user_id === userId && x.day === day && x.hour === hour)) {
-        toast.error("此員工已排班於該時段");
-        return;
-      }
-      setPending(true);
-      try {
-        const unavailable = await checkUnavailable(userId, day, hour);
-        const created = await createAssignment(scheduleId, userId, day, hour, token);
-        pushUndo(`新增 ${nameOf(userId)} · ${DAYS[day]} ${pad2(hour)}:00`, async () => {
-          await deleteAssignment(scheduleId, created.id, token);
-        });
-        invalidate();
-        if (unavailable) {
-          toast.warning(`已新增排班，但 ${nameOf(userId)} 該時段標記為不可用（已強制排班）`);
-        } else {
-          toast.success("已新增排班");
-        }
-      } catch (e) {
-        toast.error(`新增失敗：${(e as Error).message}`);
-      } finally {
-        setPending(false);
-      }
-      return;
+  const handleClear = useCallback(async () => {
+    if (!selection || !scheduleId || busy || occupying.length === 0) return;
+    const toDelete = occupying;
+    const label = `清除 ${DAYS[selection.day]} ${rangeLabel(selection.rMin, selection.rMax)}（${toDelete.length} 筆）`;
+    setBusy(true);
+    try {
+      for (const a of toDelete) await deleteAssignment(scheduleId, a.id, token);
+      pushUndo(label, async () => {
+        for (const a of toDelete) await createAssignment(scheduleId, a.user_id, a.day, a.hour, token);
+      });
+      invalidate();
+      clearSelection();
+      toast.success(`已清除 ${toDelete.length} 筆指派`);
+    } catch (e) {
+      toast.error(`清除失敗：${(e as Error).message}`);
+    } finally {
+      setBusy(false);
     }
-
-    if (activeData.kind === "assignment") {
-      const a = activeData.assignment;
-      if (a.day === day && a.hour === hour) return;
-      if (assignments.some((x) => x.user_id === a.user_id && x.day === day && x.hour === hour)) {
-        toast.error("此員工已排班於該時段");
-        return;
-      }
-      setPending(true);
-      try {
-        const unavailable = await checkUnavailable(a.user_id, day, hour);
-        const created = await createAssignment(scheduleId, a.user_id, day, hour, token);
-        await deleteAssignment(scheduleId, a.id, token);
-        pushUndo(`移動 ${nameOf(a.user_id)} · ${DAYS[a.day]} ${pad2(a.hour)}:00 → ${DAYS[day]} ${pad2(hour)}:00`, async () => {
-          await createAssignment(scheduleId, a.user_id, a.day, a.hour, token);
-          await deleteAssignment(scheduleId, created.id, token);
-        });
-        invalidate();
-        if (unavailable) {
-          toast.warning(`已移動排班，但 ${nameOf(a.user_id)} 該時段標記為不可用（已強制排班）`);
-        } else {
-          toast.success("已移動排班");
-        }
-      } catch (e) {
-        toast.error(`移動失敗：${(e as Error).message}`);
-      } finally {
-        setPending(false);
-      }
-    }
-  }, [scheduleId, assignments, token, checkUnavailable, pushUndo, nameOf, invalidate]);
+  }, [selection, scheduleId, busy, occupying, token, pushUndo, invalidate, clearSelection]);
 
   if (disabled) {
     return (
@@ -652,49 +599,169 @@ function ManualEditView({
     );
   }
 
+  const isEmptySelection = !!selection && occupying.length === 0;
+  const isOccupiedSelection = !!selection && occupying.length > 0;
+
   return (
-    <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-      <div className={cn("flex gap-4", isFullscreen ? "flex-1 min-h-0" : "flex-col lg:flex-row")}>
-        {/* Sidebar — draggable employee list */}
+    <div className={cn("flex gap-4", isFullscreen ? "flex-1 min-h-0" : "flex-col lg:flex-row")}>
+      {/* Sidebar — employee reference list (weekly hours per person) */}
+      <div className={cn(
+        "flex flex-col gap-2 rounded-2xl border border-white/10 p-3",
+        isFullscreen ? "w-64 flex-shrink-0 overflow-y-auto" : "lg:w-64 lg:flex-shrink-0",
+      )} style={{ background: "rgba(255,255,255,0.03)" }}>
+        <div className="flex items-center justify-between px-1">
+          <p className="text-xs text-white/40">員工本週時數</p>
+          <Button
+            variant="outline" size="sm"
+            className="h-7 gap-1.5 border-white/10 text-white/50 hover:bg-white/5 hover:text-white text-[11px] px-2"
+            onClick={handleUndo}
+            disabled={undoStack.length === 0 || busy}
+          >
+            <Undo2 className="size-3" /> 復原 ({undoStack.length})
+          </Button>
+        </div>
+        <div className={cn("flex flex-col gap-1.5", isFullscreen ? "" : "max-h-80 lg:max-h-none overflow-y-auto")}>
+          {orgUsers.map((u) => {
+            const hours = assignments.filter((a) => a.user_id === u.id).length;
+            const c = colorOf(u.id);
+            return (
+              <div key={u.id} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 select-none">
+                <div className="size-7 rounded-full flex items-center justify-center text-xs font-semibold text-white flex-shrink-0"
+                  style={{ background: c.bg, border: `1px solid ${c.border}` }}>
+                  {u.name[0]}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-white truncate">{u.name}</div>
+                  <div className="text-[10px] text-white/35">本週 {hours}h</div>
+                </div>
+              </div>
+            );
+          })}
+          {orgUsers.length === 0 && (
+            <p className="px-2 py-4 text-center text-xs text-white/25">尚無員工資料</p>
+          )}
+        </div>
+        <p className="px-1 text-[10px] leading-relaxed text-white/25">
+          在右側格子上拖曳選取一段連續時段，即可一次指派整段班次給某位員工；選取已有排班的範圍可整段清除。系統會自動驗證可用性，若違反仍可強制排班。
+        </p>
+      </div>
+
+      {/* Grid + selection toolbar */}
+      <div className={cn("flex-1 min-w-0 flex flex-col gap-2", isFullscreen && "min-h-0")}>
+        {/* Selection toolbar — fixed height, content swaps based on selection state */}
         <div className={cn(
-          "flex flex-col gap-2 rounded-2xl border border-white/10 p-3",
-          isFullscreen ? "w-64 flex-shrink-0 overflow-y-auto" : "lg:w-64 lg:flex-shrink-0",
-        )} style={{ background: "rgba(255,255,255,0.03)" }}>
-          <div className="flex items-center justify-between px-1">
-            <p className="text-xs text-white/40">員工清單 · 拖曳至右側時格</p>
-            <Button
-              variant="outline" size="sm"
-              className="h-7 gap-1.5 border-white/10 text-white/50 hover:bg-white/5 hover:text-white text-[11px] px-2"
-              onClick={handleUndo}
-              disabled={undoStack.length === 0 || pending}
+          "flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-xs transition-colors",
+          selection ? "border-indigo-500/30 bg-indigo-500/[0.06]" : "border-white/10 bg-white/[0.02]",
+        )}>
+          {!selection && (
+            <span className="text-white/30">拖曳格子以選取一段連續時段，可一次指派或清除整段班次</span>
+          )}
+          {isEmptySelection && (
+            <>
+              <span className="text-indigo-300/80 shrink-0">
+                已選取 {DAYS[selection!.day]} {rangeLabel(selection!.rMin, selection!.rMax)}
+              </span>
+              <Select value={pickedEmployeeId} onValueChange={(v) => setPickedEmployeeId(v ?? "")}>
+                <SelectTrigger className="h-8 w-40 text-xs border-white/10 bg-white/5">
+                  <span className="truncate">{orgUsers.find((u) => u.id === pickedEmployeeId)?.name ?? "選擇員工"}</span>
+                </SelectTrigger>
+                <SelectContent>
+                  {orgUsers.map((u) => (
+                    <SelectItem key={u.id} value={u.id} className="text-xs">{u.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                size="sm"
+                className="h-8 gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-3"
+                onClick={handleAssign}
+                disabled={!pickedEmployeeId || busy}
+              >
+                {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+                指派整段班次
+              </Button>
+            </>
+          )}
+          {isOccupiedSelection && (
+            <>
+              <span className="text-indigo-300/80 shrink-0">
+                已選取 {DAYS[selection!.day]} {rangeLabel(selection!.rMin, selection!.rMax)} · 此範圍內有 {occupying.length} 筆排班
+                {occupyingByUser.length > 0 && (
+                  <span className="text-white/30">
+                    （{occupyingByUser.map(([uid, n]) => `${nameOf(uid)} ×${n}`).join("、")}）
+                  </span>
+                )}
+              </span>
+              {!confirmingClear ? (
+                <Button
+                  size="sm" variant="outline"
+                  className="h-8 gap-1.5 border-red-500/30 text-red-300 hover:bg-red-500/10 hover:text-red-200 text-xs px-3"
+                  onClick={() => setConfirmingClear(true)}
+                  disabled={busy}
+                >
+                  <Trash2 className="size-3.5" /> 清除此範圍排班
+                </Button>
+              ) : (
+                <span className="flex items-center gap-1.5">
+                  <span className="text-red-300/80">確定清除 {occupying.length} 筆排班？</span>
+                  <Button
+                    size="sm"
+                    className="h-8 gap-1.5 bg-red-600 hover:bg-red-500 text-white text-xs px-3"
+                    onClick={handleClear}
+                    disabled={busy}
+                  >
+                    {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                    確定清除
+                  </Button>
+                  <Button
+                    size="sm" variant="outline"
+                    className="h-8 border-white/10 text-white/50 hover:bg-white/5 text-xs px-3"
+                    onClick={() => setConfirmingClear(false)}
+                    disabled={busy}
+                  >
+                    取消
+                  </Button>
+                </span>
+              )}
+            </>
+          )}
+          {selection && (
+            <button
+              onClick={clearSelection}
+              className="ml-auto size-7 flex items-center justify-center rounded text-white/30 hover:text-white/70 hover:bg-white/10 transition-colors flex-shrink-0"
+              aria-label="取消選取"
             >
-              <Undo2 className="size-3" /> 復原 ({undoStack.length})
-            </Button>
-          </div>
-          <div className={cn("flex flex-col gap-1.5", isFullscreen ? "" : "max-h-80 lg:max-h-none overflow-y-auto")}>
-            {orgUsers.map((u) => {
-              const hours = assignments.filter((a) => a.user_id === u.id).length;
-              return <DraggableEmployeeCard key={u.id} user={u} color={colorOf(u.id)} hours={hours} />;
-            })}
-            {orgUsers.length === 0 && (
-              <p className="px-2 py-4 text-center text-xs text-white/25">尚無員工資料</p>
-            )}
-          </div>
-          <DroppableTrash />
-          <p className="px-1 text-[10px] leading-relaxed text-white/25">
-            拖曳員工卡片到時格可新增排班；拖曳已排班的圓形頭像可移動或移除（拉到垃圾桶區）。系統會自動驗證可用性，若違反仍可強制排班。
-          </p>
+              <X className="size-3.5" />
+            </button>
+          )}
         </div>
 
         {/* Grid */}
-        <div className={cn(
-          "flex-1 min-w-0 overflow-x-auto overflow-y-auto rounded-2xl border border-white/10",
-          isFullscreen && "min-h-0",
-        )} style={{
-          background: "rgba(255,255,255,0.03)",
-          maxHeight: isFullscreen ? undefined : "calc(100dvh - 350px)",
-          touchAction: "pan-x pan-y",
-        }}>
+        <div
+          className={cn(
+            "flex-1 min-w-0 overflow-x-auto overflow-y-auto rounded-2xl border border-white/10",
+            isFullscreen && "min-h-0",
+          )}
+          style={{
+            background: "rgba(255,255,255,0.03)",
+            maxHeight: isFullscreen ? undefined : "calc(100dvh - 350px)",
+            ...sensorsContainerStyle,
+          }}
+          onPointerMove={(e) => {
+            if (!drag.current.active) return;
+            const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+            if (!el) return;
+            const cell = el.closest("[data-day]") as HTMLElement | null;
+            if (!cell) return;
+            const d = Number(cell.dataset.day);
+            const r = Number(cell.dataset.row);
+            if (isNaN(d) || isNaN(r) || d !== drag.current.day) return;
+            if (drag.current.end !== r) {
+              drag.current.end = r;
+              tick();
+            }
+          }}
+        >
           <div className="min-w-[640px]">
             <div className="grid border-b border-white/10 sticky top-0 z-10 bg-[rgba(13,13,26,0.92)] backdrop-blur-sm"
               style={{ gridTemplateColumns: "4rem repeat(7, 130px)" }}>
@@ -706,7 +773,7 @@ function ManualEditView({
                 </div>
               ))}
             </div>
-            {EDIT_HOURS.map((h) => (
+            {EDIT_HOURS.map((h, rowIdx) => (
               <div key={h} className="grid border-b border-white/[0.05] last:border-b-0"
                 style={{ gridTemplateColumns: "4rem repeat(7, 130px)" }}>
                 <div className="flex items-center justify-end pr-2 text-[10px] text-white/35 py-1">
@@ -714,12 +781,28 @@ function ManualEditView({
                 </div>
                 {DAYS.map((_, di) => {
                   const here = cellsByPos.get(`${di}-${h}`) ?? [];
+                  const inPreview = preview && di === preview.day && rowIdx >= preview.rMin && rowIdx <= preview.rMax;
+                  const inSelection = selection && di === selection.day && rowIdx >= selection.rMin && rowIdx <= selection.rMax;
                   return (
-                    <DroppableCell key={di} day={di} hour={h}>
+                    <div
+                      key={di}
+                      data-day={di}
+                      data-row={rowIdx}
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        beginSelect(di, rowIdx);
+                      }}
+                      style={{ touchAction: "none" }}
+                      className={cn(
+                        "border-r border-b border-white/[0.05] last:border-r-0 min-h-9 p-1 flex flex-wrap content-start gap-1 cursor-pointer select-none transition-colors",
+                        inPreview && "bg-indigo-500/25 ring-1 ring-inset ring-indigo-400/60",
+                        !inPreview && inSelection && "bg-indigo-500/15 ring-1 ring-inset ring-indigo-400/40",
+                      )}
+                    >
                       {here.map((a) => (
-                        <DraggableChip key={a.id} assignment={a} color={colorOf(a.user_id)} name={nameOf(a.user_id)} />
+                        <ShiftChip key={a.id} assignment={a} color={colorOf(a.user_id)} name={nameOf(a.user_id)} />
                       ))}
-                    </DroppableCell>
+                    </div>
                   );
                 })}
               </div>
@@ -727,32 +810,7 @@ function ManualEditView({
           </div>
         </div>
       </div>
-
-      <DragOverlay>
-        {activeDrag?.kind === "employee" && (() => {
-          const u = orgUsers.find((x) => x.id === activeDrag.userId);
-          if (!u) return null;
-          const c = colorOf(u.id);
-          return (
-            <div className="flex items-center gap-2 rounded-lg border px-3 py-2 shadow-xl"
-              style={{ background: "rgba(20,20,36,0.95)", borderColor: c.border }}>
-              <div className="size-7 rounded-full flex items-center justify-center text-xs font-semibold text-white"
-                style={{ background: c.bg, border: `1px solid ${c.border}` }}>{u.name[0]}</div>
-              <span className="text-sm text-white">{u.name}</span>
-            </div>
-          );
-        })()}
-        {activeDrag?.kind === "assignment" && (() => {
-          const c = colorOf(activeDrag.assignment.user_id);
-          return (
-            <div className="size-6 rounded-full flex items-center justify-center text-[10px] font-semibold text-white shadow-xl"
-              style={{ background: c.bg, border: `1px solid ${c.border}` }}>
-              {nameOf(activeDrag.assignment.user_id)[0]}
-            </div>
-          );
-        })()}
-      </DragOverlay>
-    </DndContext>
+    </div>
   );
 }
 

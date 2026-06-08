@@ -445,20 +445,23 @@ score(assignment) = preference_weight(employee, store) × availability(employee,
 
 #### 5.1.2 手動排班
 
-> ✅ **已實作並通過瀏覽器端到端驗證（2026-06-08）**：`/schedules` 新增「手動編輯」分頁，使用 dnd-kit 實作拖曳排班，詳見下方實作記錄。
+> ✅ **已實作並通過瀏覽器端到端驗證（2026-06-08，重新設計版）**：`/schedules`「手動編輯」分頁改採**框選範圍 → 指定員工**互動模型（取代原 dnd-kit 拖曳排班），詳見下方實作記錄與設計變更說明。
 
-- 員工清單（側邊欄）顯示：姓名、本週已排時數（拖曳卡片，依大頭貼顏色與員工視角一致）
-- 支援拖曳員工卡片至 7×24 時格新增指派；拖曳已排班大頭貼可在時格間移動，或拖曳到垃圾桶區移除
-- 拖曳放置後自動驗證可用性（呼叫 `GET /users/{user_id}/availability?week=`，無權限時靜默略過驗證），違規時以警告 toast 提示「已強制排班」，**仍會完成放置**
-- 重複指派防呆：同一員工已在該時段時顯示錯誤 toast 並中止操作
+> **設計變更說明**：原版以 dnd-kit 實作「拖曳員工卡片/已排班大頭貼」的逐格操作，但使用者回饋「實務上很少逐小時安排，通常都是整段時間排一次班」——拖放單一格子的互動與實際排班心智模型不符，且操作成本高（需重複拖曳每一小時）。因此整個拖放系統被移除，改為與 `/settings/demand` 一致的**框選 + 動作面板**模型：先框選一段連續時段，再透過工具列一次套用「指派整段班次」或「清除此範圍排班」，更貼近「整段班次」的真實排班顆粒度。
+
+- 員工清單（側邊欄）為唯讀摘要列表，顯示：姓名、本週已排時數（不再可拖曳）
+- 互動模型：在 7×24 格子上**拖曳框選**一段同一天的連續時段（鎖定單一日期欄，因為班次是「某人在某天的一段時間」），放開後格子上方浮現選取範圍工具列：
+  - **空白範圍** → 顯示員工下拉選單 + 「指派整段班次」按鈕，選定員工後一次建立該範圍內所有小時的指派
+  - **已有排班的範圍** → 顯示「此範圍內有 N 筆排班（員工 ×次數）」摘要 + 「清除此範圍排班」按鈕（紅色，danger），點擊後出現行內二次確認「確定清除 N 筆排班？」/「取消」，避免誤刪
+- 指派建立前會呼叫 `GET /users/{user_id}/availability?week=` 自動驗證可用性（無權限時靜默略過驗證），若範圍內任一小時該員工標記為不可用，仍會完成指派但跳出警告 toast「已強制排班」
 - 手動指派一律以 `is_manual = true` 標記（後端 `POST /assignments` 自動處理），重新自動排班不會覆蓋
-- 支援 undo（最多保留 10 步）：每個操作（新增／移動／移除）會推入「逆操作」closure，點擊「復原」依序執行對應的建立／刪除 API 呼叫並還原畫面
+- 支援 undo（最多保留 10 步）：每次「指派整段班次」/「清除此範圍排班」整批操作只推入**一筆**逆操作 closure（而非每小時一筆），點擊「復原」一次性還原整批異動
 
-**實作完成記錄（2026-06-08）**：
-- 前端：`schedules/page.tsx` 新增 `ManualEditView`（含 `DraggableEmployeeCard`、`DraggableChip`、`DroppableCell`、`DroppableTrash`），以 `DndContext` + `useDraggable`/`useDroppable`/`DragOverlay` 實作；`schedules-api.ts` 新增 `createAssignment`/`deleteAssignment`；`availability-api.ts` 新增 `fetchUserAvailability`
-- 修正 `apiFetch` 對 204/空回應的 JSON 解析錯誤（DELETE 回應為空 body 時不再丟出 "Unexpected end of JSON input"）
-- 順帶修正後端 `scheduler.py` 既有 bug：`load_inputs` 仍使用已棄用的 `RoleGroup.store_id`（單一門市）查詢條件，改為 `RoleGroup.store_ids.any(store_id)`（對應 RoleGroup 多門市 `store_ids[]` 改版），修正後自動排班才能正確找到門市員工
-- 瀏覽器端到端驗證：拖曳新增 → 移動 → 拖曳至垃圾桶移除 → 復原，並以資料庫查詢確認 `is_manual = true` 與筆數正確；驗證重複指派防呆不會建立多餘紀錄
+**實作完成記錄（2026-06-08，重新設計版）**：
+- 前端：`schedules/page.tsx` 的 `ManualEditView` 整段重寫，移除全部 dnd-kit 用法（`DndContext`/`useDraggable`/`useDroppable`/`DragOverlay`/`DraggableEmployeeCard`/`DraggableChip`/`DroppableCell`/`DroppableTrash`），改為沿用 `settings/demand` 既有的框選慣例（`useRef` 存放拖曳狀態、`requestAnimationFrame` 節流重繪、全域 `pointerup` 提交選取、`data-day`/`data-row` 屬性 + `elementFromPoint` 做指標對應格子、單一日期欄鎖定）；新增 `EDIT_HOURS`（以 7 為起點的小時輪轉陣列，讓連續列索引恆對應連續時段，含跨午夜情形）與 `ShiftChip`（純展示用大頭貼圓點，無拖曳邏輯）
+- 批次 undo：`handleAssign`/`handleClear` 各自只 `pushUndo` 一次，inverse closure 內迴圈呼叫對應的建立/刪除 API；**修正一個過程中發現的 undo 失效 bug**——原本 `handleAssign` 的 inverse 直接捕捉建立當下回傳的 `AssignmentDTO[]` IDs 並用於日後刪除，但若中間夾雜了「清除→復原清除」的循環，這些記錄會被刪除又以新 ID 重建，導致捕捉的舊 ID 失效並丟出「Assignment not found」；修正為 inverse 執行當下才呼叫 `fetchScheduleDetail` 重新以 `(user_id, day, hour)` 比對出**當前**的 assignment IDs 再刪除
+- 修正 `<Select>` 觸發器顯示員工原始 UUID 而非姓名的 bug：沿用既有門市選擇器的模式，以 `<span>{orgUsers.find(u => u.id === pickedEmployeeId)?.name ?? "選擇員工"}</span>` 取代 `<SelectValue>`（該元件預設直接顯示 `value`，不會反查標籤）
+- 瀏覽器端到端驗證：框選空白範圍 → 選擇員工 → 「指派整段班次」批次建立（toast 顯示筆數、側邊欄時數即時更新）；框選已佔用範圍 → 「清除此範圍排班」→ 行內二次確認 → 批次刪除；undo 還原「指派」與「清除」皆正確（含修正後的 ID 重新解析路徑）；以資料庫查詢確認最終 `assignments` 表筆數、`day`/`hour`、`is_manual = true` 均與畫面一致
 
 **班表發佈後行為**（未實作，列為後續項目）：
 - `status = published` 後，管理者仍可修改，每次修改記錄稽核日誌（操作者、時間、變更內容）
@@ -860,8 +863,8 @@ PATCH  /api/schedules/:scheduleId/assignments/:id  # 手動拖曳覆蓋
 
 ---
 
-*文件版本：v0.11 — 2026-06-08*
-*Phase 2「手動拖曳排班」已完成並通過瀏覽器端到端驗證：`/schedules` 新增「手動編輯」分頁，以 dnd-kit 實作員工卡片／已排班大頭貼的拖放（新增、移動、移除）、可用性驗證警告（強制排班）、重複指派防呆、`is_manual` 自動標記、最多 10 步 undo；新增前端 API 封裝 `createAssignment`/`deleteAssignment`/`fetchUserAvailability`，並修正 `apiFetch` 對空回應的 JSON 解析錯誤與後端 `scheduler.py` 中過時的 `RoleGroup.store_id` 查詢（改為 `store_ids.any()`）。詳見 5.1.2、Phase 2 路線圖。*
+*文件版本：v0.12 — 2026-06-08*
+*Phase 2「手動排班」互動模型重新設計並通過瀏覽器端到端驗證：根據使用者回饋「實務排班通常整段時間一次安排，很少逐小時操作」，移除原 dnd-kit 拖放系統（`DraggableEmployeeCard`/`DraggableChip`/`DroppableCell`/`DroppableTrash`），改為與 `/settings/demand` 一致的「框選連續時段 → 動作面板」模型：框選空白範圍可選定員工後一次「指派整段班次」，框選已佔用範圍可「清除此範圍排班」（含行內二次確認）；批次操作各自只佔用一筆 undo（最多 10 步）。過程中順帶修正兩個 bug：① `<Select>` 觸發器顯示員工 UUID 而非姓名（改用既有門市選擇器的 `<span>` 反查模式取代 `<SelectValue>`）；② undo 對「指派」的逆操作原本捕捉建立當下的 assignment ID，若中間經過「清除→復原」循環會因記錄被刪除重建而 ID 失效並丟出「Assignment not found」，改為 inverse 執行當下才以 `(user_id, day, hour)` 重新查詢目前的 assignment IDs 再刪除。詳見 5.1.2。*
 
 *議題 10（IDEA-02）已完成並通過瀏覽器端到端驗證：工作能力需求由「方案 A 疊加層 + 子需求人數（int）」改版為「標籤制（boolean）+ 與人數需求單表整合」。能力不再設人數、與人數採相同的「選取範圍 → 點選筆刷」操作（統一 `BrushPalette` 元件）、單表同時顯示（格內常駐能力色點）、單一儲存動作一併送出；排班演算法子配額由「N 人」改為「至少 1 人」覆蓋約束。含 Alembic migration `d7e5f3a9b1c4`。詳見 3.7.1、4.2、議題 9→10。*
 
