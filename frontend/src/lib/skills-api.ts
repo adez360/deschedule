@@ -1,4 +1,4 @@
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { apiFetch } from "@/lib/api-client";
 
 export interface SkillDTO {
   id: string;
@@ -24,69 +24,59 @@ export interface StoreSkillDemandDTO {
   skill: SkillDTO;
 }
 
-const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
-const json = (token: string) => ({ ...auth(token), "Content-Type": "application/json" });
-const check = async (r: Response) => { if (!r.ok) throw new Error(`${r.status}`); };
-
 // ── Skill CRUD (org-level) ──────────────────────────────────────────────────
 
-export const fetchSkills = (orgId: string, token: string): Promise<SkillDTO[]> =>
-  fetch(`${API}/api/organizations/${orgId}/skills`, { headers: auth(token) })
-    .then(async r => { await check(r); return r.json(); });
+export const fetchSkills = (orgId: string, token: string) =>
+  apiFetch<SkillDTO[]>(`/organizations/${orgId}/skills`, token);
 
-export const createSkill = (orgId: string, name: string, token: string): Promise<SkillDTO> =>
-  fetch(`${API}/api/organizations/${orgId}/skills`, {
+export const createSkill = (orgId: string, name: string, token: string) =>
+  apiFetch<SkillDTO>(`/organizations/${orgId}/skills`, token, {
     method: "POST",
-    headers: json(token),
     body: JSON.stringify({ name }),
-  }).then(async r => { await check(r); return r.json(); });
+  });
 
-export const updateSkill = (skillId: string, name: string, token: string): Promise<SkillDTO> =>
-  fetch(`${API}/api/skills/${skillId}`, {
+export const updateSkill = (skillId: string, name: string, token: string) =>
+  apiFetch<SkillDTO>(`/skills/${skillId}`, token, {
     method: "PATCH",
-    headers: json(token),
     body: JSON.stringify({ name }),
-  }).then(async r => { await check(r); return r.json(); });
+  });
 
-export const deleteSkill = (skillId: string, token: string): Promise<void> =>
-  fetch(`${API}/api/skills/${skillId}`, { method: "DELETE", headers: auth(token) })
-    .then(async r => { await check(r); });
+export const deleteSkill = (skillId: string, token: string) =>
+  apiFetch<void>(`/skills/${skillId}`, token, { method: "DELETE" });
 
 // ── User skill assignment ───────────────────────────────────────────────────
 
-export const fetchUserSkills = (userId: string, token: string): Promise<UserSkillDTO[]> =>
-  fetch(`${API}/api/users/${userId}/skills`, { headers: auth(token) })
-    .then(async r => { await check(r); return r.json(); });
+export const fetchUserSkills = (userId: string, token: string) =>
+  apiFetch<UserSkillDTO[]>(`/users/${userId}/skills`, token);
 
-export const assignSkill = (userId: string, skillId: string, token: string): Promise<UserSkillDTO> =>
-  fetch(`${API}/api/users/${userId}/skills/${skillId}`, { method: "POST", headers: auth(token) })
-    .then(async r => { await check(r); return r.json(); });
+export const assignSkill = (userId: string, skillId: string, token: string) =>
+  apiFetch<UserSkillDTO>(`/users/${userId}/skills/${skillId}`, token, { method: "POST" });
 
-export const revokeSkill = (userId: string, skillId: string, token: string): Promise<void> =>
-  fetch(`${API}/api/users/${userId}/skills/${skillId}`, { method: "DELETE", headers: auth(token) })
-    .then(async r => { await check(r); });
+export const revokeSkill = (userId: string, skillId: string, token: string) =>
+  apiFetch<void>(`/users/${userId}/skills/${skillId}`, token, { method: "DELETE" });
 
 // ── StoreSkillDemand ─────────────────────────────────────────────────────────
 
-export const fetchSkillDemand = (
-  storeId: string, weekStart: string, token: string,
-): Promise<StoreSkillDemandDTO[]> =>
-  fetch(`${API}/api/stores/${storeId}/skill-demand/${weekStart}`, { headers: auth(token) })
-    .then(async r => { await check(r); return r.json(); });
+export const fetchSkillDemand = (storeId: string, weekStart: string, token: string) =>
+  apiFetch<StoreSkillDemandDTO[]>(`/stores/${storeId}/skill-demand/${weekStart}`, token);
 
 export const setSkillDemand = (
-  storeId: string, weekStart: string, body: { skill_id: string; slots: boolean[][] }, token: string,
-): Promise<StoreSkillDemandDTO> =>
-  fetch(`${API}/api/stores/${storeId}/skill-demand/${weekStart}`, {
+  storeId: string,
+  weekStart: string,
+  body: { skill_id: string; slots: boolean[][] },
+  token: string,
+) =>
+  apiFetch<StoreSkillDemandDTO>(`/stores/${storeId}/skill-demand/${weekStart}`, token, {
     method: "PUT",
-    headers: json(token),
     body: JSON.stringify(body),
-  }).then(async r => { await check(r); return r.json(); });
+  });
 
 export const deleteSkillDemand = (
-  storeId: string, weekStart: string, skillId: string, token: string,
-): Promise<void> =>
-  fetch(`${API}/api/stores/${storeId}/skill-demand/${weekStart}/${skillId}`, {
+  storeId: string,
+  weekStart: string,
+  skillId: string,
+  token: string,
+) =>
+  apiFetch<void>(`/stores/${storeId}/skill-demand/${weekStart}/${skillId}`, token, {
     method: "DELETE",
-    headers: auth(token),
-  }).then(async r => { await check(r); });
+  });

@@ -14,6 +14,7 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     phone: str | None = Field(default=None, max_length=32)
+    home_store_id: uuid.UUID | None = Field(default=None)
 
 
 class UserResponse(BaseModel):
@@ -24,5 +25,6 @@ class UserResponse(BaseModel):
     name: str
     email: EmailStr
     phone: str | None
+    home_store_id: uuid.UUID | None
     is_active: bool
     created_at: datetime

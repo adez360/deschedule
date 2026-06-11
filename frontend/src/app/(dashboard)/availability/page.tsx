@@ -12,13 +12,7 @@ import { cn } from "@/lib/utils";
 import { fetchAvailability, saveAvailability } from "@/lib/availability-api";
 import { fetchMyPreferences, saveMyPreferences } from "@/lib/preferences-api";
 import { fetchStores } from "@/lib/schedules-api";
-
-// ─── Constants ─────────────────────────────────────────────────────────────
-
-const DAYS = ["一", "二", "三", "四", "五", "六", "日"];
-
-// Display order: 07:00 → 06:00 (next day)
-const DISPLAY_HOURS = Array.from({ length: 24 }, (_, i) => (i + 7) % 24);
+import { DAYS, DISPLAY_HOURS } from "@/lib/constants";
 
 const STORE_COLORS = [
   "#7C3AED", "#2563EB", "#059669", "#D97706", "#EC4899", "#0891B2",

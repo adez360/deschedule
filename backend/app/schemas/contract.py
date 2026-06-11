@@ -34,7 +34,6 @@ class ContractResponse(BaseModel):
 
     id: uuid.UUID
     user_id: uuid.UUID
-    store_id: uuid.UUID
     contract_type: ContractType
     monthly_salary: Decimal | None
     hourly_rate: Decimal | None

@@ -6,7 +6,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Date, DateTime, Enum as SAEnum, ForeignKey, Numeric, String, UUID, func
+from sqlalchemy import Date, DateTime, Enum as SAEnum, ForeignKey, Integer, Numeric, String, UUID, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -23,15 +23,12 @@ class ContractType(str, enum.Enum):
 
 
 class EmployeeContract(Base):
-    """Active contract for an employee at a specific store. Multiple contracts may exist over time."""
+    """Active contract for an employee (org-level, not per-store). Multiple contracts may exist over time."""
     __tablename__ = "employee_contracts"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
-    )
-    store_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("stores.id"), nullable=False
     )
     contract_type: Mapped[ContractType] = mapped_column(SAEnum(ContractType), nullable=False)
     monthly_salary: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)  # FT only
@@ -41,7 +38,6 @@ class EmployeeContract(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped[User] = relationship("User", back_populates="contracts")
-    store: Mapped[Store] = relationship("Store", back_populates="contracts")
 
 
 class PayrollReport(Base):
@@ -65,10 +61,36 @@ class PayrollReport(Base):
     contract_type: Mapped[ContractType] = mapped_column(SAEnum(ContractType), nullable=False)
     monthly_salary_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     hourly_rate_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
-    gross_pay: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    gross_pay: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     currency: Mapped[str] = mapped_column(String(3), default="TWD")
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     user: Mapped[User] = relationship("User")
     store: Mapped[Store] = relationship("Store", back_populates="payroll_reports")
+
+
+class PayrollAdjustment(Base):
+    """
+    Manual pay adjustment line item for an employee in a given month (其他項目).
+    Examples: overtime (+), transport (+), custom deductions (-).
+    Amount is signed; sums into the employee's monthly grand total alongside base pay.
+    Scoped per (user, year, month) — not per store — matching the personal monthly report.
+    """
+    __tablename__ = "payroll_adjustments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    month: Mapped[int] = mapped_column(Integer, nullable=False)
+    label: Mapped[str] = mapped_column(String(100), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)  # signed (+/-)
+    currency: Mapped[str] = mapped_column(String(3), default="TWD")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    user: Mapped[User] = relationship("User")

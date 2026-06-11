@@ -65,7 +65,9 @@ async def update_user(
         await assert_org_access(current_user, target.organization_id, db)
         await assert_permission(current_user, "org.manage", db)
 
-    for field, value in body.model_dump(exclude_none=True).items():
+    # exclude_unset → only apply fields the client actually sent (proper PATCH),
+    # so home_store_id can be set to a value or explicitly cleared to null.
+    for field, value in body.model_dump(exclude_unset=True).items():
         setattr(target, field, value)
     await db.commit()
     await db.refresh(target)

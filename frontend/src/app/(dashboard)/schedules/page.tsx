@@ -2,10 +2,10 @@
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useSession } from "next-auth/react";
-import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useQuery, useQueries, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft, ChevronRight, Zap, Send, Archive, CalendarDays, Copy, Check,
-  Loader2, Maximize2, Minimize2, Trash2, Undo2, X,
+  Loader2, Maximize2, Minimize2, Trash2, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,12 +23,10 @@ import {
   type StoreDTO, type EmployeeRow, type AssignmentDTO, type UserDTO,
 } from "@/lib/schedules-api";
 import { fetchUserAvailability } from "@/lib/availability-api";
+import { fetchDemandMaybe, emptySlots } from "@/lib/demand-api";
+import { DAYS, DISPLAY_HOURS } from "@/lib/constants";
 
 // ─── Constants ─────────────────────────────────────────────────────────────
-
-const DAYS = ["一", "二", "三", "四", "五", "六", "日"];
-
-const HEAT_HOURS = Array.from({ length: 24 }, (_, i) => (i + 7) % 24);
 
 const STATUS_CONFIG = {
   draft:     { label: "草稿",   cls: "border-yellow-500/30 bg-yellow-500/10 text-yellow-400" },
@@ -45,15 +43,6 @@ const SHIFT_COLORS = [
   { bg: "rgba(8,145,178,0.35)",   border: "rgba(34,211,238,0.5)"  },
   { bg: "rgba(139,92,246,0.35)",  border: "rgba(167,139,250,0.5)" },
 ];
-
-// Mock demand (to be replaced when DemandTemplate API is connected)
-const DEMAND: number[][] = Array.from({ length: 7 }, (_, d) =>
-  Array.from({ length: 24 }, (_, h) => {
-    if (h < 9 || h >= 22) return 0;
-    if (d >= 5) return h >= 11 && h < 21 ? 2 : 1;
-    return h >= 9 && h < 18 ? 3 : 2;
-  })
-);
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -234,8 +223,9 @@ function EmployeeGrid({ employees, weekDates, loading, isFullscreen }: {
 
 // ─── CoverageHeatmap ───────────────────────────────────────────────────────
 
-function CoverageHeatmap({ actual, weekDates, loading, isFullscreen }: {
+function CoverageHeatmap({ actual, demand, weekDates, loading, isFullscreen }: {
   actual: number[][];
+  demand: number[][];
   weekDates: Date[];
   loading: boolean;
   isFullscreen: boolean;
@@ -319,7 +309,7 @@ function CoverageHeatmap({ actual, weekDates, loading, isFullscreen }: {
               ))}
             </div>
           ) : (
-            HEAT_HOURS.map((h) => (
+            DISPLAY_HOURS.map((h) => (
               <div key={h}
                 className="grid border-b border-white/[0.05] last:border-b-0"
                 style={{ gridTemplateColumns: "4rem repeat(7, 130px)" }}>
@@ -328,7 +318,7 @@ function CoverageHeatmap({ actual, weekDates, loading, isFullscreen }: {
                 </div>
                 {DAYS.map((_, di) => {
                   const a = actual[di][h];
-                  const dem = DEMAND[di][h];
+                  const dem = demand[di][h];
                   return (
                     <div key={di} className="border-r border-white/[0.06] last:border-r-0 p-[3px]">
                       <div
@@ -348,20 +338,90 @@ function CoverageHeatmap({ actual, weekDates, loading, isFullscreen }: {
   );
 }
 
-// ─── ManualEditView (range-select → assign whole shift) ────────────────────
+// ─── ScheduleHistory ──────────────────────────────────────────────────────────
 
-type UndoOp = { label: string; inverse: () => Promise<void> };
-type Selection = { day: number; rMin: number; rMax: number };
-type DragState = { active: boolean; day: number; origin: number; end: number };
+function ScheduleHistory({
+  scheduleList,
+  weekStartStr,
+  onJump,
+}: {
+  scheduleList: import("@/lib/schedules-api").ScheduleSummaryDTO[];
+  weekStartStr: string;
+  onJump: (weekStart: Date) => void;
+}) {
+  const sorted = [...scheduleList].sort((a, b) => b.week_start.localeCompare(a.week_start));
 
-const EDIT_HOURS = Array.from({ length: 24 }, (_, i) => (i + 7) % 24);
+  if (sorted.length === 0) {
+    return (
+      <div className="rounded-2xl border border-white/10 py-16 text-center text-sm text-white/30"
+        style={{ background: "rgba(255,255,255,0.03)" }}>
+        本門市尚無班表記錄
+      </div>
+    );
+  }
 
-/** Format a row-index range into a human-readable "HH:00–HH:00（共 N 小時）" label. */
-function rangeLabel(rMin: number, rMax: number) {
-  const startHour = EDIT_HOURS[rMin];
-  const endHour = (EDIT_HOURS[rMax] + 1) % 24;
-  const count = rMax - rMin + 1;
-  return `${pad2(startHour)}:00–${pad2(endHour)}:00（共 ${count} 小時）`;
+  return (
+    <div className="rounded-2xl border border-white/10 overflow-hidden"
+      style={{ background: "rgba(255,255,255,0.03)" }}>
+      {/* Column headers */}
+      <div className="grid grid-cols-[1fr_auto_auto] gap-4 px-5 py-2.5 border-b border-white/[0.06] text-[11px] text-white/30 font-medium uppercase tracking-wide">
+        <span>週次</span>
+        <span>狀態</span>
+        <span />
+      </div>
+      <div className="divide-y divide-white/[0.04]">
+        {sorted.map((s) => {
+          const start = new Date(s.week_start + "T00:00:00");
+          const end = new Date(start);
+          end.setDate(start.getDate() + 6);
+          const isCurrent = s.week_start === weekStartStr;
+          const cfg = STATUS_CONFIG[s.status];
+          return (
+            <div
+              key={s.id}
+              className={cn(
+                "grid grid-cols-[1fr_auto_auto] items-center gap-4 px-5 py-3.5 transition-colors",
+                isCurrent ? "bg-purple-500/[0.06]" : "hover:bg-white/[0.02]",
+              )}
+            >
+              <div>
+                <span className="text-sm text-white/80">
+                  {start.getFullYear()} · {fmtDate(start)}–{fmtDate(end)}
+                </span>
+                {isCurrent && (
+                  <span className="ml-2 text-[10px] text-purple-400/70">目前週次</span>
+                )}
+              </div>
+              <Badge className={cn("text-[11px] border", cfg.cls)}>{cfg.label}</Badge>
+              <Button
+                size="sm" variant="outline"
+                className="h-7 min-w-[52px] text-xs border-white/10 text-white/50 hover:bg-white/5 hover:text-white px-3"
+                onClick={() => onJump(start)}
+              >
+                {isCurrent ? "目前" : "查看"}
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── ManualEditView (IDEAS-03: multi-day range-select → sidebar-click assign) ─
+
+type Selection = { dMin: number; dMax: number; rMin: number; rMax: number };
+type DragState = { active: boolean; dOrigin: number; rOrigin: number; dCur: number; rCur: number };
+type AvailStatus = "full" | "partial" | "none" | "loading";
+
+function rangeLabel(sel: Selection) {
+  const startHour = DISPLAY_HOURS[sel.rMin];
+  const endHour = (DISPLAY_HOURS[sel.rMax] + 1) % 24;
+  const totalCells = (sel.dMax - sel.dMin + 1) * (sel.rMax - sel.rMin + 1);
+  const dayPart = sel.dMin === sel.dMax
+    ? `週${DAYS[sel.dMin]}`
+    : `週${DAYS[sel.dMin]}–週${DAYS[sel.dMax]}`;
+  return `${dayPart}，${pad2(startHour)}:00–${pad2(endHour)}:00（共 ${totalCells} 格）`;
 }
 
 function ShiftChip({ assignment, color, name }: {
@@ -399,7 +459,7 @@ function ManualEditView({
   isFullscreen: boolean;
   disabled: boolean;
 }) {
-  const drag = useRef<DragState>({ active: false, day: 0, origin: 0, end: 0 });
+  const drag = useRef<DragState>({ active: false, dOrigin: 0, rOrigin: 0, dCur: 0, rCur: 0 });
   const [, setSeed] = useState(0);
   const rafRef = useRef(0);
   const tick = useCallback(() => {
@@ -409,8 +469,6 @@ function ManualEditView({
 
   const [selection, setSelection] = useState<Selection | null>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
-  const [pickedEmployeeId, setPickedEmployeeId] = useState("");
-  const [undoStack, setUndoStack] = useState<UndoOp[]>([]);
   const [busy, setBusy] = useState(false);
 
   const sensorsContainerStyle = { touchAction: "pan-x pan-y" } as const;
@@ -442,32 +500,21 @@ function ManualEditView({
     queryClient.invalidateQueries({ queryKey: ["scheduleDetail", scheduleId] });
   }, [queryClient, scheduleId]);
 
-  const pushUndo = useCallback((label: string, inverse: () => Promise<void>) => {
-    setUndoStack((s) => [...s.slice(-9), { label, inverse }]);
-  }, []);
+  // ── Per-employee availability queries (enabled only when selection is active) ─
+  const availQueries = useQueries({
+    queries: orgUsers.map((u) => ({
+      queryKey: ["userAvailabilityForSchedule", u.id, weekStartStr],
+      queryFn: () => fetchUserAvailability(u.id, weekStartStr, token),
+      enabled: !!selection && !!token,
+      staleTime: 5 * 60_000,
+    })),
+  });
 
-  const handleUndo = useCallback(async () => {
-    const last = undoStack[undoStack.length - 1];
-    if (!last || busy) return;
-    setUndoStack((s) => s.slice(0, -1));
-    setBusy(true);
-    try {
-      await last.inverse();
-      invalidate();
-      toast.success(`已復原：${last.label}`);
-    } catch (e) {
-      toast.error(`復原失敗：${(e as Error).message}`);
-    } finally {
-      setBusy(false);
-    }
-  }, [undoStack, busy, invalidate]);
-
-  // ── Drag-to-select a contiguous hour range within a single day column ─────
+  // ── Drag-to-select a multi-day, multi-hour rectangular range ──────────────
   const beginSelect = useCallback((day: number, row: number) => {
     setSelection(null);
     setConfirmingClear(false);
-    setPickedEmployeeId("");
-    drag.current = { active: true, day, origin: row, end: row };
+    drag.current = { active: true, dOrigin: day, rOrigin: row, dCur: day, rCur: row };
     tick();
   }, [tick]);
 
@@ -475,9 +522,12 @@ function ManualEditView({
     const commit = () => {
       if (!drag.current.active) return;
       cancelAnimationFrame(rafRef.current);
-      const { day, origin, end } = drag.current;
+      const { dOrigin, rOrigin, dCur, rCur } = drag.current;
       drag.current.active = false;
-      setSelection({ day, rMin: Math.min(origin, end), rMax: Math.max(origin, end) });
+      setSelection({
+        dMin: Math.min(dOrigin, dCur), dMax: Math.max(dOrigin, dCur),
+        rMin: Math.min(rOrigin, rCur), rMax: Math.max(rOrigin, rCur),
+      });
       setSeed((n) => n + 1);
     };
     window.addEventListener("pointerup", commit);
@@ -486,17 +536,21 @@ function ManualEditView({
 
   const preview = (() => {
     if (!drag.current.active) return null;
-    const { day, origin, end } = drag.current;
-    return { day, rMin: Math.min(origin, end), rMax: Math.max(origin, end) };
+    const { dOrigin, rOrigin, dCur, rCur } = drag.current;
+    return {
+      dMin: Math.min(dOrigin, dCur), dMax: Math.max(dOrigin, dCur),
+      rMin: Math.min(rOrigin, rCur), rMax: Math.max(rOrigin, rCur),
+    };
   })();
 
-  // Cells (day, hour) covered by the committed selection, and any existing
-  // assignments occupying them.
+  // Cells (day, hour) covered by the committed selection.
   const selectedCells = useMemo(() => {
     if (!selection) return [];
     const cells: { day: number; hour: number }[] = [];
-    for (let r = selection.rMin; r <= selection.rMax; r++) {
-      cells.push({ day: selection.day, hour: EDIT_HOURS[r] });
+    for (let d = selection.dMin; d <= selection.dMax; d++) {
+      for (let r = selection.rMin; r <= selection.rMax; r++) {
+        cells.push({ day: d, hour: DISPLAY_HOURS[r] });
+      }
     }
     return cells;
   }, [selection]);
@@ -507,79 +561,60 @@ function ManualEditView({
     return assignments.filter((a) => set.has(`${a.day}-${a.hour}`));
   }, [selectedCells, assignments]);
 
-  const occupyingByUser = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const a of occupying) m.set(a.user_id, (m.get(a.user_id) ?? 0) + 1);
-    return [...m.entries()];
-  }, [occupying]);
+  // Availability status per employee for the current selection range.
+  const availStatusMap = useMemo<Map<string, AvailStatus>>(() => {
+    if (!selection) return new Map();
+    const m = new Map<string, AvailStatus>();
+    orgUsers.forEach((u, i) => {
+      const q = availQueries[i];
+      if (!q || q.isPending) { m.set(u.id, "loading"); return; }
+      const slots = q.data?.[0]?.slots;
+      if (!slots) { m.set(u.id, "none"); return; }
+      let hasTrue = false, hasFalse = false;
+      for (const c of selectedCells) {
+        if (slots[c.day]?.[c.hour]) hasTrue = true;
+        else hasFalse = true;
+      }
+      m.set(u.id, !hasTrue ? "none" : hasFalse ? "partial" : "full");
+    });
+    return m;
+  }, [selection, selectedCells, orgUsers, availQueries]);
 
   const clearSelection = useCallback(() => {
     setSelection(null);
     setConfirmingClear(false);
-    setPickedEmployeeId("");
   }, []);
 
-  // Best-effort availability check — silently skipped if the manager lacks
-  // `employee.availability.edit` (assignment still proceeds, just no warning).
-  const checkAnyUnavailable = useCallback(async (userId: string, cells: { day: number; hour: number }[]) => {
-    try {
-      const data = await queryClient.fetchQuery({
-        queryKey: ["userAvailabilityForSchedule", userId, weekStartStr],
-        queryFn: () => fetchUserAvailability(userId, weekStartStr, token),
-        staleTime: 5 * 60_000,
-      });
-      const slots = data?.[0]?.slots;
-      if (!slots) return false;
-      return cells.some((c) => slots[c.day]?.[c.hour] === false);
-    } catch {
-      return false;
-    }
-  }, [queryClient, weekStartStr, token]);
-
-  const handleAssign = useCallback(async () => {
-    if (!selection || !scheduleId || !pickedEmployeeId || busy || selectedCells.length === 0) return;
-    const userId = pickedEmployeeId;
+  const handleAssign = useCallback(async (userId: string) => {
+    if (!selection || !scheduleId || busy || selectedCells.length === 0) return;
     const cells = selectedCells;
-    const label = `指派 ${nameOf(userId)} · ${DAYS[selection.day]} ${rangeLabel(selection.rMin, selection.rMax)}`;
+    const status = availStatusMap.get(userId);
     setBusy(true);
     try {
-      const unavailable = await checkAnyUnavailable(userId, cells);
       const created: AssignmentDTO[] = [];
       for (const c of cells) {
         created.push(await createAssignment(scheduleId, userId, c.day, c.hour, token));
       }
-      pushUndo(label, async () => {
-        // Re-resolve current IDs at undo-time: an intervening clear+undo cycle
-        // would have deleted and recreated these rows under new IDs.
-        const detail = await fetchScheduleDetail(scheduleId, token);
-        const set = new Set(cells.map((c) => `${c.day}-${c.hour}`));
-        const current = detail.assignments.filter((a) => a.user_id === userId && set.has(`${a.day}-${a.hour}`));
-        for (const a of current) await deleteAssignment(scheduleId, a.id, token);
-      });
       invalidate();
       clearSelection();
-      if (unavailable) {
+      if (status === "none" || status === "partial") {
         toast.warning(`已建立 ${created.length} 筆指派，但部分時段 ${nameOf(userId)} 標記為不可用（已強制排班）`);
       } else {
-        toast.success(`已建立 ${created.length} 筆指派（整段班次）`);
+        toast.success(`已建立 ${created.length} 筆指派`);
       }
     } catch (e) {
       toast.error(`指派失敗：${(e as Error).message}`);
     } finally {
       setBusy(false);
     }
-  }, [selection, scheduleId, pickedEmployeeId, busy, selectedCells, nameOf, checkAnyUnavailable, token, pushUndo, invalidate, clearSelection]);
+  }, [selection, scheduleId, busy, selectedCells, availStatusMap, nameOf, token, invalidate, clearSelection]);
 
   const handleClear = useCallback(async () => {
     if (!selection || !scheduleId || busy || occupying.length === 0) return;
     const toDelete = occupying;
-    const label = `清除 ${DAYS[selection.day]} ${rangeLabel(selection.rMin, selection.rMax)}（${toDelete.length} 筆）`;
     setBusy(true);
     try {
       for (const a of toDelete) await deleteAssignment(scheduleId, a.id, token);
-      pushUndo(label, async () => {
-        for (const a of toDelete) await createAssignment(scheduleId, a.user_id, a.day, a.hour, token);
-      });
       invalidate();
       clearSelection();
       toast.success(`已清除 ${toDelete.length} 筆指派`);
@@ -588,7 +623,7 @@ function ManualEditView({
     } finally {
       setBusy(false);
     }
-  }, [selection, scheduleId, busy, occupying, token, pushUndo, invalidate, clearSelection]);
+  }, [selection, scheduleId, busy, occupying, token, invalidate, clearSelection]);
 
   if (disabled) {
     return (
@@ -599,33 +634,33 @@ function ManualEditView({
     );
   }
 
-  const isEmptySelection = !!selection && occupying.length === 0;
-  const isOccupiedSelection = !!selection && occupying.length > 0;
-
   return (
     <div className={cn("flex gap-4", isFullscreen ? "flex-1 min-h-0" : "flex-col lg:flex-row")}>
-      {/* Sidebar — employee reference list (weekly hours per person) */}
+      {/* Sidebar — employee list with availability markers; click to assign when range is selected */}
       <div className={cn(
         "flex flex-col gap-2 rounded-2xl border border-white/10 p-3",
         isFullscreen ? "w-64 flex-shrink-0 overflow-y-auto" : "lg:w-64 lg:flex-shrink-0",
       )} style={{ background: "rgba(255,255,255,0.03)" }}>
-        <div className="flex items-center justify-between px-1">
-          <p className="text-xs text-white/40">員工本週時數</p>
-          <Button
-            variant="outline" size="sm"
-            className="h-7 gap-1.5 border-white/10 text-white/50 hover:bg-white/5 hover:text-white text-[11px] px-2"
-            onClick={handleUndo}
-            disabled={undoStack.length === 0 || busy}
-          >
-            <Undo2 className="size-3" /> 復原 ({undoStack.length})
-          </Button>
-        </div>
+        <p className="px-1 text-xs text-white/40">員工清單</p>
         <div className={cn("flex flex-col gap-1.5", isFullscreen ? "" : "max-h-80 lg:max-h-none overflow-y-auto")}>
           {orgUsers.map((u) => {
             const hours = assignments.filter((a) => a.user_id === u.id).length;
             const c = colorOf(u.id);
+            const avail = availStatusMap.get(u.id);
+            const isClickable = !!selection && !busy;
             return (
-              <div key={u.id} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 select-none">
+              <button
+                key={u.id}
+                type="button"
+                onClick={() => isClickable && handleAssign(u.id)}
+                disabled={!isClickable || busy}
+                className={cn(
+                  "flex items-center gap-2 rounded-lg border px-3 py-2 select-none text-left w-full transition-colors",
+                  isClickable
+                    ? "border-indigo-500/40 bg-indigo-500/10 hover:bg-indigo-500/20 cursor-pointer"
+                    : "border-white/10 bg-white/5 cursor-default",
+                )}
+              >
                 <div className="size-7 rounded-full flex items-center justify-center text-xs font-semibold text-white flex-shrink-0"
                   style={{ background: c.bg, border: `1px solid ${c.border}` }}>
                   {u.name[0]}
@@ -634,7 +669,11 @@ function ManualEditView({
                   <div className="text-sm text-white truncate">{u.name}</div>
                   <div className="text-[10px] text-white/35">本週 {hours}h</div>
                 </div>
-              </div>
+                {avail === "loading" && <Loader2 className="size-3 animate-spin text-white/30 flex-shrink-0" />}
+                {avail === "full"    && <span className="text-[11px] text-green-400 flex-shrink-0">✓</span>}
+                {avail === "partial" && <span className="text-[11px] text-yellow-400 flex-shrink-0">⚠</span>}
+                {avail === "none"    && <span className="text-[11px] text-red-400 flex-shrink-0">✗</span>}
+              </button>
             );
           })}
           {orgUsers.length === 0 && (
@@ -642,97 +681,71 @@ function ManualEditView({
           )}
         </div>
         <p className="px-1 text-[10px] leading-relaxed text-white/25">
-          在右側格子上拖曳選取一段連續時段，即可一次指派整段班次給某位員工；選取已有排班的範圍可整段清除。系統會自動驗證可用性，若違反仍可強制排班。
+          {selection
+            ? "點擊員工立即填入選取範圍；✓ 全段可用、⚠ 部分可用、✗ 未標記"
+            : "先在右側格子拖曳選取範圍，再點擊此處員工填入班次"}
         </p>
       </div>
 
       {/* Grid + selection toolbar */}
       <div className={cn("flex-1 min-w-0 flex flex-col gap-2", isFullscreen && "min-h-0")}>
-        {/* Selection toolbar — fixed height, content swaps based on selection state */}
+        {/* Selection toolbar */}
         <div className={cn(
           "flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-xs transition-colors",
           selection ? "border-indigo-500/30 bg-indigo-500/[0.06]" : "border-white/10 bg-white/[0.02]",
         )}>
           {!selection && (
-            <span className="text-white/30">拖曳格子以選取一段連續時段，可一次指派或清除整段班次</span>
-          )}
-          {isEmptySelection && (
-            <>
-              <span className="text-indigo-300/80 shrink-0">
-                已選取 {DAYS[selection!.day]} {rangeLabel(selection!.rMin, selection!.rMax)}
-              </span>
-              <Select value={pickedEmployeeId} onValueChange={(v) => setPickedEmployeeId(v ?? "")}>
-                <SelectTrigger className="h-8 w-40 text-xs border-white/10 bg-white/5">
-                  <span className="truncate">{orgUsers.find((u) => u.id === pickedEmployeeId)?.name ?? "選擇員工"}</span>
-                </SelectTrigger>
-                <SelectContent>
-                  {orgUsers.map((u) => (
-                    <SelectItem key={u.id} value={u.id} className="text-xs">{u.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                size="sm"
-                className="h-8 gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-3"
-                onClick={handleAssign}
-                disabled={!pickedEmployeeId || busy}
-              >
-                {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-                指派整段班次
-              </Button>
-            </>
-          )}
-          {isOccupiedSelection && (
-            <>
-              <span className="text-indigo-300/80 shrink-0">
-                已選取 {DAYS[selection!.day]} {rangeLabel(selection!.rMin, selection!.rMax)} · 此範圍內有 {occupying.length} 筆排班
-                {occupyingByUser.length > 0 && (
-                  <span className="text-white/30">
-                    （{occupyingByUser.map(([uid, n]) => `${nameOf(uid)} ×${n}`).join("、")}）
-                  </span>
-                )}
-              </span>
-              {!confirmingClear ? (
-                <Button
-                  size="sm" variant="outline"
-                  className="h-8 gap-1.5 border-red-500/30 text-red-300 hover:bg-red-500/10 hover:text-red-200 text-xs px-3"
-                  onClick={() => setConfirmingClear(true)}
-                  disabled={busy}
-                >
-                  <Trash2 className="size-3.5" /> 清除此範圍排班
-                </Button>
-              ) : (
-                <span className="flex items-center gap-1.5">
-                  <span className="text-red-300/80">確定清除 {occupying.length} 筆排班？</span>
-                  <Button
-                    size="sm"
-                    className="h-8 gap-1.5 bg-red-600 hover:bg-red-500 text-white text-xs px-3"
-                    onClick={handleClear}
-                    disabled={busy}
-                  >
-                    {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
-                    確定清除
-                  </Button>
-                  <Button
-                    size="sm" variant="outline"
-                    className="h-8 border-white/10 text-white/50 hover:bg-white/5 text-xs px-3"
-                    onClick={() => setConfirmingClear(false)}
-                    disabled={busy}
-                  >
-                    取消
-                  </Button>
-                </span>
-              )}
-            </>
+            <span className="text-white/30">拖曳格子以選取範圍，選取後點擊左側員工立即填入</span>
           )}
           {selection && (
-            <button
-              onClick={clearSelection}
-              className="ml-auto size-7 flex items-center justify-center rounded text-white/30 hover:text-white/70 hover:bg-white/10 transition-colors flex-shrink-0"
-              aria-label="取消選取"
-            >
-              <X className="size-3.5" />
-            </button>
+            <>
+              <span className="text-indigo-300/80 shrink-0">
+                {rangeLabel(selection)}
+                {occupying.length > 0 && (
+                  <span className="text-white/40 ml-1">· {occupying.length} 筆排班</span>
+                )}
+              </span>
+              {occupying.length > 0 && (
+                !confirmingClear ? (
+                  <Button
+                    size="sm" variant="outline"
+                    className="h-8 gap-1.5 border-red-500/30 text-red-300 hover:bg-red-500/10 hover:text-red-200 text-xs px-3"
+                    onClick={() => setConfirmingClear(true)}
+                    disabled={busy}
+                  >
+                    <Trash2 className="size-3.5" /> 清除此範圍排班
+                  </Button>
+                ) : (
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-red-300/80">確定清除 {occupying.length} 筆排班？</span>
+                    <Button
+                      size="sm"
+                      className="h-8 gap-1.5 bg-red-600 hover:bg-red-500 text-white text-xs px-3"
+                      onClick={handleClear}
+                      disabled={busy}
+                    >
+                      {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                      確定清除
+                    </Button>
+                    <Button
+                      size="sm" variant="outline"
+                      className="h-8 border-white/10 text-white/50 hover:bg-white/5 text-xs px-3"
+                      onClick={() => setConfirmingClear(false)}
+                      disabled={busy}
+                    >
+                      取消
+                    </Button>
+                  </span>
+                )
+              )}
+              <button
+                onClick={clearSelection}
+                className="ml-auto size-7 flex items-center justify-center rounded text-white/30 hover:text-white/70 hover:bg-white/10 transition-colors flex-shrink-0"
+                aria-label="取消選取"
+              >
+                <X className="size-3.5" />
+              </button>
+            </>
           )}
         </div>
 
@@ -755,9 +768,10 @@ function ManualEditView({
             if (!cell) return;
             const d = Number(cell.dataset.day);
             const r = Number(cell.dataset.row);
-            if (isNaN(d) || isNaN(r) || d !== drag.current.day) return;
-            if (drag.current.end !== r) {
-              drag.current.end = r;
+            if (isNaN(d) || isNaN(r)) return;
+            if (drag.current.dCur !== d || drag.current.rCur !== r) {
+              drag.current.dCur = d;
+              drag.current.rCur = r;
               tick();
             }
           }}
@@ -773,7 +787,7 @@ function ManualEditView({
                 </div>
               ))}
             </div>
-            {EDIT_HOURS.map((h, rowIdx) => (
+            {DISPLAY_HOURS.map((h, rowIdx) => (
               <div key={h} className="grid border-b border-white/[0.05] last:border-b-0"
                 style={{ gridTemplateColumns: "4rem repeat(7, 130px)" }}>
                 <div className="flex items-center justify-end pr-2 text-[10px] text-white/35 py-1">
@@ -781,8 +795,8 @@ function ManualEditView({
                 </div>
                 {DAYS.map((_, di) => {
                   const here = cellsByPos.get(`${di}-${h}`) ?? [];
-                  const inPreview = preview && di === preview.day && rowIdx >= preview.rMin && rowIdx <= preview.rMax;
-                  const inSelection = selection && di === selection.day && rowIdx >= selection.rMin && rowIdx <= selection.rMax;
+                  const inPreview = preview && di >= preview.dMin && di <= preview.dMax && rowIdx >= preview.rMin && rowIdx <= preview.rMax;
+                  const inSelection = selection && di >= selection.dMin && di <= selection.dMax && rowIdx >= selection.rMin && rowIdx <= selection.rMax;
                   return (
                     <div
                       key={di}
@@ -843,6 +857,7 @@ export default function SchedulesPage() {
   const [selectedStoreId, setSelectedStoreId] = useState<string>("");
   const [weekStart, setWeekStart] = useState(() => getMondayOfWeek(new Date()));
   const [copied, setCopied] = useState(false);
+  const [activeTab, setActiveTab] = useState("employee");
   const queryClient = useQueryClient();
 
   const weekStartStr = toLocalDateStr(weekStart);
@@ -874,7 +889,7 @@ export default function SchedulesPage() {
   const { data: orgUsers = [] } = useQuery({
     queryKey: ["orgUsers", orgId],
     queryFn: () => fetchOrgUsers(orgId, token),
-    enabled: !!orgId && !!token,
+    enabled: !!orgId && !!token && activeTab !== "history",
   });
 
   const { data: scheduleList = [] } = useQuery({
@@ -889,6 +904,12 @@ export default function SchedulesPage() {
     queryKey: ["scheduleDetail", currentScheduleSummary?.id],
     queryFn: () => fetchScheduleDetail(currentScheduleSummary!.id, token),
     enabled: !!currentScheduleSummary?.id && !!token,
+  });
+
+  const { data: demandData } = useQuery({
+    queryKey: ["demand", storeId, weekStartStr],
+    queryFn: () => fetchDemandMaybe(storeId, weekStartStr, token),
+    enabled: !!storeId && !!token,
   });
 
   // ── Derived data ─────────────────────────────────────────────────────────
@@ -1082,7 +1103,7 @@ export default function SchedulesPage() {
         className={cn(isFullscreen && "flex flex-col")}
         style={isFullscreen ? { height: "100dvh", background: "#0D0D1A", padding: "16px", gap: "12px" } : undefined}
       >
-        <Tabs defaultValue="employee" className={cn(isFullscreen && "flex flex-col flex-1 min-h-0")}>
+        <Tabs value={activeTab} onValueChange={setActiveTab} className={cn(isFullscreen && "flex flex-col flex-1 min-h-0")}>
           {/* TabsList + fullscreen button */}
           <div className="flex items-center gap-2">
             <TabsList className="h-auto gap-1 rounded-xl border border-white/10 bg-white/5 p-1">
@@ -1098,8 +1119,14 @@ export default function SchedulesPage() {
               </TabsTrigger>
               <TabsTrigger
                 value="manual"
-                className="rounded-lg px-5 py-2 text-sm text-white/50 data-[state=active]:bg-purple-600/30 data-[state=active]:text-white data-[state=active]:shadow-none">
+                disabled={status === "archived"}
+                className="rounded-lg px-5 py-2 text-sm text-white/50 data-[state=active]:bg-purple-600/30 data-[state=active]:text-white data-[state=active]:shadow-none disabled:opacity-30 disabled:cursor-not-allowed">
                 手動編輯
+              </TabsTrigger>
+              <TabsTrigger
+                value="history"
+                className="rounded-lg px-5 py-2 text-sm text-white/50 data-[state=active]:bg-purple-600/30 data-[state=active]:text-white data-[state=active]:shadow-none">
+                歷史
               </TabsTrigger>
             </TabsList>
             <button
@@ -1135,6 +1162,7 @@ export default function SchedulesPage() {
           >
             <CoverageHeatmap
               actual={actual}
+              demand={demandData?.slots ?? emptySlots()}
               weekDates={weekDates}
               loading={scheduleLoading}
               isFullscreen={isFullscreen}
@@ -1154,6 +1182,17 @@ export default function SchedulesPage() {
               queryClient={queryClient}
               isFullscreen={isFullscreen}
               disabled={!currentScheduleSummary || status === "archived"}
+            />
+          </TabsContent>
+
+          <TabsContent value="history" className="mt-5">
+            <ScheduleHistory
+              scheduleList={scheduleList}
+              weekStartStr={weekStartStr}
+              onJump={(weekStart) => {
+                setWeekStart(weekStart);
+                setActiveTab("employee");
+              }}
             />
           </TabsContent>
         </Tabs>

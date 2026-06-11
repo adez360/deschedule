@@ -1,3 +1,5 @@
+import { apiFetch } from "@/lib/api-client";
+
 export interface DemandDTO {
   id: string;
   store_id: string;
@@ -5,25 +7,11 @@ export interface DemandDTO {
   slots: number[][];  // [7][24]
 }
 
-async function apiFetch<T>(path: string, token: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      ...init?.headers,
-    },
-  });
-  if (!res.ok) {
-    if (res.status === 404) throw Object.assign(new Error("not_found"), { status: 404 });
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail ?? `HTTP ${res.status}`);
-  }
-  return res.json();
-}
-
 export const fetchDemand = (storeId: string, weekStart: string, token: string) =>
-  apiFetch<DemandDTO>(`/stores/${storeId}/demand/${weekStart}`, token);
+  apiFetch<DemandDTO>(`/stores/${storeId}/demand/${weekStart}`, token, { on404: "throw" });
+
+export const fetchDemandMaybe = (storeId: string, weekStart: string, token: string) =>
+  apiFetch<DemandDTO | null>(`/stores/${storeId}/demand/${weekStart}`, token, { on404: "null" });
 
 export const saveDemand = (storeId: string, weekStart: string, slots: number[][], token: string) =>
   apiFetch<DemandDTO>(`/stores/${storeId}/demand/${weekStart}`, token, {

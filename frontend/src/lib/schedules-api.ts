@@ -1,7 +1,7 @@
-// Schedules page API helpers — all calls go through Next.js → FastAPI proxy
+import { apiFetch } from "@/lib/api-client";
 
 export interface StoreDTO { id: string; name: string; timezone: string }
-export interface UserDTO  { id: string; name: string; email: string }
+export interface UserDTO  { id: string; name: string; email: string; home_store_id?: string | null }
 export interface AssignmentDTO {
   id: string; schedule_id: string; user_id: string; store_id: string;
   day: number; hour: number; is_manual: boolean;
@@ -14,26 +14,6 @@ export interface ScheduleDetailDTO extends ScheduleSummaryDTO {
   assignments: AssignmentDTO[];
 }
 export interface ShiftBlock { start: number; end: number; isManual: boolean }
-
-// ─── Fetch helpers ──────────────────────────────────────────────────────────
-
-async function apiFetch<T>(path: string, token: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      ...init?.headers,
-    },
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail ?? `HTTP ${res.status}`);
-  }
-  if (res.status === 204) return undefined as T;
-  const text = await res.text();
-  return text ? JSON.parse(text) : (undefined as T);
-}
 
 // ─── API calls ──────────────────────────────────────────────────────────────
 

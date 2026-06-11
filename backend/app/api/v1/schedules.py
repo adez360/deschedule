@@ -1,15 +1,13 @@
 import uuid
 from datetime import date, datetime, timezone
-from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import assert_org_access, assert_permission, get_current_user
 from app.core.database import get_db
-from app.models.payroll import ContractType, EmployeeContract, PayrollReport
 from app.models.schedule import Assignment, Schedule, ScheduleStatus
 from app.models.store import Store
 from app.models.user import User
@@ -22,6 +20,7 @@ from app.schemas.schedule import (
     ScheduleStatusUpdate,
     ScheduleWithAssignments,
 )
+from app.services.payroll import create_payroll_reports
 from app.services.scheduler import load_inputs, run_greedy
 
 router = APIRouter(tags=["schedules"])
@@ -173,7 +172,7 @@ async def update_schedule_status(
     if body.status == ScheduleStatus.PUBLISHED:
         schedule.published_at = datetime.now(timezone.utc)
     elif body.status == ScheduleStatus.ARCHIVED:
-        await _create_payroll_reports(schedule, db)
+        await create_payroll_reports(schedule, db)
 
     await db.commit()
     await db.refresh(schedule)
@@ -278,74 +277,3 @@ async def delete_assignment(
 
     await db.delete(assignment)
     await db.commit()
-
-
-# ── PayrollReport generation (triggered on archive) ───────────────────────────
-
-async def _create_payroll_reports(schedule: Schedule, db: AsyncSession) -> None:
-    assignments_result = await db.execute(
-        select(Assignment).where(Assignment.schedule_id == schedule.id)
-    )
-    assignments = assignments_result.scalars().all()
-
-    # Aggregate hours per (user, store)
-    hours_map: dict[tuple[uuid.UUID, uuid.UUID], int] = {}
-    for a in assignments:
-        key = (a.user_id, a.store_id)
-        hours_map[key] = hours_map.get(key, 0) + 1
-
-    for (user_id, store_id), total_hours in hours_map.items():
-        contract_result = await db.execute(
-            select(EmployeeContract)
-            .where(
-                EmployeeContract.user_id == user_id,
-                EmployeeContract.store_id == store_id,
-                EmployeeContract.effective_from <= schedule.week_start,
-                or_(
-                    EmployeeContract.effective_until.is_(None),
-                    EmployeeContract.effective_until >= schedule.week_start,
-                ),
-            )
-            .order_by(EmployeeContract.effective_from.desc())
-            .limit(1)
-        )
-        contract = contract_result.scalar_one_or_none()
-        if not contract or contract.contract_type == ContractType.CUSTOM:
-            continue  # no contract, or CUSTOM (no pay terms) → no payroll record
-
-        hours_dec = Decimal(total_hours)
-        if contract.contract_type == ContractType.FT:
-            monthly_salary_snapshot = contract.monthly_salary
-            hourly_rate_snapshot = None
-            gross = contract.monthly_salary
-        else:  # PT
-            monthly_salary_snapshot = None
-            hourly_rate_snapshot = contract.hourly_rate
-            gross = (hours_dec * contract.hourly_rate).quantize(Decimal("0.01"))
-
-        existing_result = await db.execute(
-            select(PayrollReport).where(
-                PayrollReport.user_id == user_id,
-                PayrollReport.store_id == store_id,
-                PayrollReport.week_start == schedule.week_start,
-            )
-        )
-        report = existing_result.scalar_one_or_none()
-
-        if report:
-            report.total_hours = hours_dec
-            report.contract_type = contract.contract_type
-            report.monthly_salary_snapshot = monthly_salary_snapshot
-            report.hourly_rate_snapshot = hourly_rate_snapshot
-            report.gross_pay = gross
-        else:
-            db.add(PayrollReport(
-                user_id=user_id,
-                store_id=store_id,
-                week_start=schedule.week_start,
-                total_hours=hours_dec,
-                contract_type=contract.contract_type,
-                monthly_salary_snapshot=monthly_salary_snapshot,
-                hourly_rate_snapshot=hourly_rate_snapshot,
-                gross_pay=gross,
-            ))

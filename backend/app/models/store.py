@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from app.models.availability import StorePreference
     from app.models.demand import DemandTemplate, ScheduleDeadlineConfig
     from app.models.organization import Organization
-    from app.models.payroll import EmployeeContract, PayrollReport
+    from app.models.payroll import PayrollReport
     from app.models.schedule import Schedule
     from app.models.skill import StoreSkillDemand
 
@@ -37,6 +37,5 @@ class Store(Base):
         "ScheduleDeadlineConfig", back_populates="store", uselist=False
     )
     preferences: Mapped[list[StorePreference]] = relationship("StorePreference", back_populates="store")
-    contracts: Mapped[list[EmployeeContract]] = relationship("EmployeeContract", back_populates="store")
     payroll_reports: Mapped[list[PayrollReport]] = relationship("PayrollReport", back_populates="store")
     skill_demands: Mapped[list[StoreSkillDemand]] = relationship("StoreSkillDemand", back_populates="store")

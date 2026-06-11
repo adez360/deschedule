@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { fetchStores } from "@/lib/schedules-api";
 import { fetchDemand, saveDemand, copyDemandFromWeek, emptySlots } from "@/lib/demand-api";
 import { fetchSkills, fetchSkillDemand, setSkillDemand, type SkillDTO } from "@/lib/skills-api";
+import { DAYS, DISPLAY_HOURS } from "@/lib/constants";
 
 const SKILL_TAG_COLORS = [
   { bg: "rgba(45,212,191,0.35)",  text: "rgba(204,251,241,0.95)" },  // teal
@@ -23,8 +24,6 @@ const SKILL_TAG_COLORS = [
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
-const DAYS = ["一", "二", "三", "四", "五", "六", "日"];
-const DISPLAY_HOURS = Array.from({ length: 24 }, (_, i) => (i + 7) % 24);
 const MAX_DEMAND = 5;
 const DIVIDER_HOURS = [7, 12, 15, 18, 23];
 

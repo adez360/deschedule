@@ -5,15 +5,16 @@ import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import {
   AlarmClock,
-  CalendarDays,
-  Clock,
-  LayoutDashboard,
-  LogOut,
-  Settings,
-  Store,
-  Users,
   BarChart3,
+  CalendarDays,
+  CalendarRange,
+  Clock,
+  LogOut,
+  Receipt,
   ShieldCheck,
+  Store,
+  User,
+  Users,
 } from "lucide-react";
 import {
   Sidebar,
@@ -30,33 +31,55 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import type { Session } from "next-auth";
 
-const selfNav = [
-  { href: "/dashboard", label: "首頁", icon: LayoutDashboard },
-  { href: "/availability", label: "可用時段", icon: Clock },
+type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }> };
+
+const personalNav: NavItem[] = [
+  { href: "/profile", label: "個人資料", icon: User },
+  { href: "/availability", label: "排班時段", icon: Clock },
   { href: "/preferences", label: "門市偏好", icon: Store },
   { href: "/schedules", label: "我的班表", icon: CalendarDays },
+  { href: "/payroll", label: "薪資報表", icon: Receipt },
 ];
 
-const managerNav = [
-  { href: "/schedules", label: "班表管理", icon: CalendarDays },
-  { href: "/employees", label: "員工管理", icon: Users },
+const managerNav: NavItem[] = [
+  { href: "/schedules", label: "班表管理", icon: CalendarRange },
+  { href: "/employees", label: "人員管理", icon: Users },
+];
+
+const adminMgmtNav: NavItem[] = [
+  { href: "/settings/stores", label: "門市管理", icon: Store },
+  { href: "/settings/role-groups", label: "身份組與權限", icon: ShieldCheck },
+];
+
+const systemNav: NavItem[] = [
   { href: "/settings/demand", label: "人力需求", icon: BarChart3 },
   { href: "/settings/deadline", label: "截止日設定", icon: AlarmClock },
 ];
 
-const adminNav = [
-  { href: "/settings/stores", label: "門市管理", icon: Store },
-  { href: "/settings/role-groups", label: "身份組", icon: ShieldCheck },
-  { href: "/settings", label: "系統設定", icon: Settings },
-];
+function NavGroup({ items, prefix }: { items: NavItem[]; prefix: string }) {
+  const pathname = usePathname();
+  return (
+    <SidebarMenu>
+      {items.map(({ href, label, icon: Icon }) => (
+        <SidebarMenuItem key={`${prefix}-${href}`}>
+          <SidebarMenuButton
+            render={<Link href={href} />}
+            isActive={pathname === href}
+          >
+            <Icon />
+            <span>{label}</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      ))}
+    </SidebarMenu>
+  );
+}
 
 type Props = {
   user: Session["user"];
 };
 
 export function AppSidebar({ user }: Props) {
-  const pathname = usePathname();
-
   const hasPermission = (perms: string[]) =>
     user.role_groups?.some((rg) =>
       rg.permissions.some((p) => perms.includes(p))
@@ -69,6 +92,11 @@ export function AppSidebar({ user }: Props) {
   ]);
 
   const showAdmin = hasPermission(["org.manage", "system.all"]);
+
+  const mgmtNav: NavItem[] = [
+    ...(showManager ? managerNav : []),
+    ...(showAdmin ? adminMgmtNav : []),
+  ];
 
   const initials = (user.name ?? user.email ?? "?")
     .split(" ")
@@ -87,60 +115,24 @@ export function AppSidebar({ user }: Props) {
         <SidebarGroup>
           <SidebarGroupLabel>個人</SidebarGroupLabel>
           <SidebarGroupContent>
-            <SidebarMenu>
-              {selfNav.map(({ href, label, icon: Icon }) => (
-                <SidebarMenuItem key={href}>
-                  <SidebarMenuButton
-                    render={<Link href={href} />}
-                    isActive={pathname === href}
-                  >
-                    <Icon />
-                    <span>{label}</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
+            <NavGroup items={personalNav} prefix="self" />
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {showManager && (
+        {mgmtNav.length > 0 && (
           <SidebarGroup>
             <SidebarGroupLabel>管理</SidebarGroupLabel>
             <SidebarGroupContent>
-              <SidebarMenu>
-                {managerNav.map(({ href, label, icon: Icon }) => (
-                  <SidebarMenuItem key={`mgr-${href}`}>
-                    <SidebarMenuButton
-                      render={<Link href={href} />}
-                      isActive={pathname === href}
-                    >
-                      <Icon />
-                      <span>{label}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
+              <NavGroup items={mgmtNav} prefix="mgmt" />
             </SidebarGroupContent>
           </SidebarGroup>
         )}
 
         {showAdmin && (
           <SidebarGroup>
-            <SidebarGroupLabel>系統</SidebarGroupLabel>
+            <SidebarGroupLabel>系統設定</SidebarGroupLabel>
             <SidebarGroupContent>
-              <SidebarMenu>
-                {adminNav.map(({ href, label, icon: Icon }) => (
-                  <SidebarMenuItem key={`adm-${href}`}>
-                    <SidebarMenuButton
-                      render={<Link href={href} />}
-                      isActive={pathname === href}
-                    >
-                      <Icon />
-                      <span>{label}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
+              <NavGroup items={systemNav} prefix="sys" />
             </SidebarGroupContent>
           </SidebarGroup>
         )}

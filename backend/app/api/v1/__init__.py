@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import auth, availability, calendar, contracts, health, organizations, preferences, role_groups, schedules, skills, store_config, stores, users
+from app.api.v1 import auth, availability, calendar, contracts, health, organizations, payroll, preferences, role_groups, schedules, skills, store_config, stores, users
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(health.router)
@@ -16,3 +16,4 @@ api_router.include_router(schedules.router)
 api_router.include_router(calendar.router)
 api_router.include_router(contracts.router)
 api_router.include_router(skills.router)
+api_router.include_router(payroll.router)
