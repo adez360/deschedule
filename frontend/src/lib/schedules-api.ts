@@ -1,7 +1,11 @@
 import { apiFetch } from "@/lib/api-client";
 
 export interface StoreDTO { id: string; name: string; timezone: string }
-export interface UserDTO  { id: string; name: string; email: string; home_store_id?: string | null }
+export interface UserDTO  {
+  id: string; name: string; nickname?: string; email: string;
+  phone?: string | null; avatar_url?: string | null; note?: string | null;
+  hire_date?: string | null; home_store_id?: string | null;
+}
 export interface AssignmentDTO {
   id: string; schedule_id: string; user_id: string; store_id: string;
   day: number; hour: number; is_manual: boolean;

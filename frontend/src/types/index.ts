@@ -15,7 +15,8 @@ export type Permission =
   | "employee.availability.edit"
   | "employee.preference.edit"
   | "employee.payroll.view"
-  | "employee.contract.edit";
+  | "employee.contract.edit"
+  | "employee.identity.view";
 
 export interface RoleGroupSummary {
   id: string;

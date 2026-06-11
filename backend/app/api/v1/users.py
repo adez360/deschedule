@@ -6,14 +6,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import assert_org_access, assert_permission, get_current_user, get_user_permissions
 from app.core.database import get_db
 from app.models.user import User
-from app.schemas.user import UserResponse, UserUpdate
+from app.schemas.user import UserResponse, UserUpdate, serialize_user
 
 router = APIRouter(prefix="/users", tags=["users"])
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_me(current_user: User = Depends(get_current_user)):
-    return current_user
+async def get_me(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    perms = await get_user_permissions(current_user.id, db)
+    return serialize_user(current_user, perms, current_user.id)
 
 
 @router.patch("/me", response_model=UserResponse)
@@ -23,11 +27,16 @@ async def update_me(
     db: AsyncSession = Depends(get_db),
 ):
     await assert_permission(current_user, "self.profile.edit", db)
-    for field, value in body.model_dump(exclude_none=True).items():
+    perms = await get_user_permissions(current_user.id, db)
+    data = body.model_dump(exclude_none=True)
+    # note is a manager-only field; ignore it on self-service updates
+    if "system.all" not in perms and "org.employee.manage" not in perms:
+        data.pop("note", None)
+    for field, value in data.items():
         setattr(current_user, field, value)
     await db.commit()
     await db.refresh(current_user)
-    return current_user
+    return serialize_user(current_user, perms, current_user.id)
 
 
 @router.get("/{user_id}", response_model=UserResponse)
@@ -45,7 +54,8 @@ async def get_user(
         await assert_org_access(current_user, target.organization_id, db)
         await assert_permission(current_user, "org.manage", db)
 
-    return target
+    perms = await get_user_permissions(current_user.id, db)
+    return serialize_user(target, perms, current_user.id)
 
 
 @router.patch("/{user_id}", response_model=UserResponse)
@@ -67,11 +77,15 @@ async def update_user(
 
     # exclude_unset → only apply fields the client actually sent (proper PATCH),
     # so home_store_id can be set to a value or explicitly cleared to null.
-    for field, value in body.model_dump(exclude_unset=True).items():
+    perms = await get_user_permissions(current_user.id, db)
+    data = body.model_dump(exclude_unset=True)
+    if "system.all" not in perms and "org.employee.manage" not in perms:
+        data.pop("note", None)
+    for field, value in data.items():
         setattr(target, field, value)
     await db.commit()
     await db.refresh(target)
-    return target
+    return serialize_user(target, perms, current_user.id)
 
 
 @router.patch("/{user_id}/deactivate", response_model=UserResponse)
@@ -88,4 +102,5 @@ async def deactivate_user(
     target.is_active = False
     await db.commit()
     await db.refresh(target)
-    return target
+    perms = await get_user_permissions(current_user.id, db)
+    return serialize_user(target, perms, current_user.id)

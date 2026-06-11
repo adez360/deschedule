@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import assert_org_access, assert_permission, get_current_user
+from app.api.deps import assert_org_access, assert_permission, get_current_user, get_user_permissions
 from app.core.database import get_db
 from app.models.payroll import PayrollAdjustment, PayrollReport
 from app.models.schedule import Schedule, ScheduleStatus
@@ -39,7 +39,15 @@ async def _query_reports(
     *,
     store_ids: list[uuid.UUID] | None = None,
     user_id: uuid.UUID | None = None,
+    viewer: User | None = None,
 ) -> list[PayrollReportResponse]:
+    # name/nickname visibility gate (employee.identity.view); viewer=None → show real names (self view)
+    show_identity = True
+    viewer_id = None
+    if viewer is not None:
+        viewer_id = viewer.id
+        perms = await get_user_permissions(viewer.id, db)
+        show_identity = "system.all" in perms or "employee.identity.view" in perms
     first, last = _month_range(year, month)
     stmt = (
         select(PayrollReport)
@@ -60,7 +68,7 @@ async def _query_reports(
         PayrollReportResponse(
             id=r.id,
             user_id=r.user_id,
-            user_name=r.user.name,
+            user_name=r.user.name if (show_identity or r.user_id == viewer_id) else r.user.nickname,
             store_id=r.store_id,
             store_name=r.store.name,
             home_store_id=r.user.home_store_id,
@@ -95,7 +103,7 @@ async def get_org_payroll(
         select(Store.id).where(Store.organization_id == org_id)
     )
     store_ids = list(stores_result.scalars().all())
-    return await _query_reports(year, month, db, store_ids=store_ids)
+    return await _query_reports(year, month, db, store_ids=store_ids, viewer=current_user)
 
 
 @router.get("/stores/{store_id}/payroll", response_model=list[PayrollReportResponse])
@@ -111,7 +119,7 @@ async def get_store_payroll(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Store not found")
     await assert_org_access(current_user, store.organization_id, db)
     await assert_permission(current_user, "employee.payroll.view", db)
-    return await _query_reports(year, month, db, store_ids=[store_id])
+    return await _query_reports(year, month, db, store_ids=[store_id], viewer=current_user)
 
 
 # ── Personal views (self / specific employee) ─────────────────────────────────
@@ -143,7 +151,7 @@ async def get_user_payroll(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
         await assert_org_access(current_user, target.organization_id, db)
         await assert_permission(current_user, "employee.payroll.view", db)
-    return await _query_reports(year, month, db, user_id=user_id)
+    return await _query_reports(year, month, db, user_id=user_id, viewer=current_user)
 
 
 # ── Manual (re)generation ─────────────────────────────────────────────────────

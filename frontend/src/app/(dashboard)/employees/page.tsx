@@ -87,7 +87,11 @@ function ContractBadge({ type }: { type: ContractType | undefined }) {
 
 // ─── Detail Panel ────────────────────────────────────────────────────────────
 
-type DetailUser = { id: string; name: string; email: string; idx: number; home_store_id: string | null };
+type DetailUser = {
+  id: string; name: string; nickname: string; email: string; idx: number;
+  phone: string | null; avatar_url: string | null; note: string | null;
+  hire_date: string | null; home_store_id: string | null;
+};
 
 function DetailPanel({
   user, token, orgSkills, stores,
@@ -102,6 +106,7 @@ function DetailPanel({
   const [form, setForm] = useState<ContractSetBody>(defaultForm());
   const [showHistory, setShowHistory] = useState(false);
   const [homeStoreId, setHomeStoreId] = useState<string>(user.home_store_id ?? "");
+  const [profile, setProfile] = useState({ nickname: "", phone: "", hire_date: "", note: "", avatar_url: "" });
 
   // ── Queries ─────────────────────────────────────────────────────────────
 
@@ -138,6 +143,41 @@ function DetailPanel({
   useEffect(() => {
     setHomeStoreId(user.home_store_id ?? "");
   }, [user.id, user.home_store_id]);
+
+  // Sync profile form when switching employees
+  useEffect(() => {
+    setProfile({
+      nickname: user.nickname ?? "",
+      phone: user.phone ?? "",
+      hire_date: user.hire_date ?? "",
+      note: user.note ?? "",
+      avatar_url: user.avatar_url ?? "",
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user.id]);
+
+  const profileDirty =
+    profile.nickname !== (user.nickname ?? "") ||
+    profile.phone !== (user.phone ?? "") ||
+    profile.hire_date !== (user.hire_date ?? "") ||
+    profile.note !== (user.note ?? "") ||
+    profile.avatar_url !== (user.avatar_url ?? "");
+
+  const profileMut = useMutation({
+    mutationFn: () =>
+      updateUser(user.id, {
+        nickname: profile.nickname || undefined,
+        phone: profile.phone || null,
+        hire_date: profile.hire_date || null,
+        note: profile.note || null,
+        avatar_url: profile.avatar_url || null,
+      }, token),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["orgUsers"] });
+      toast.success("個人資料已更新");
+    },
+    onError: (e: Error) => toast.error(`更新失敗：${e.message}`),
+  });
 
   const homeStoreMut = useMutation({
     mutationFn: (storeId: string | null) =>
@@ -281,39 +321,64 @@ function DetailPanel({
                 </div>
                 <p className="text-[11px] text-white/25">全職（FT）員工的月薪只計入所屬門市的薪資報表</p>
               </div>
-              {/* Placeholder fields */}
-              {[
-                { label: "暱稱", placeholder: "對所有人公開的顯示名稱" },
-                { label: "聯絡電話", placeholder: "09XX-XXX-XXX" },
-              ].map(({ label, placeholder }) => (
-                <div key={label} className="space-y-1.5">
-                  <label className="text-xs text-white/40">{label}</label>
-                  <input
-                    disabled
-                    placeholder={placeholder}
-                    className="h-10 w-full rounded-xl border border-white/[0.07] bg-white/[0.02] px-3 text-sm text-white/30 placeholder:text-white/20 cursor-not-allowed"
-                  />
-                </div>
-              ))}
+              {/* Editable profile fields */}
+              <div className="space-y-1.5">
+                <label className="text-xs text-white/40">暱稱</label>
+                <input
+                  value={profile.nickname}
+                  onChange={(e) => setProfile((f) => ({ ...f, nickname: e.target.value }))}
+                  placeholder="對所有人公開的顯示名稱"
+                  className="h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-white placeholder:text-white/20 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30 transition-colors"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs text-white/40">聯絡電話</label>
+                <input
+                  value={profile.phone}
+                  onChange={(e) => setProfile((f) => ({ ...f, phone: e.target.value }))}
+                  placeholder="09XX-XXX-XXX"
+                  className="h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-white placeholder:text-white/20 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30 transition-colors"
+                />
+              </div>
               <div className="space-y-1.5">
                 <label className="text-xs text-white/40">入職日期</label>
                 <input
                   type="date"
-                  disabled
-                  className="h-10 w-full rounded-xl border border-white/[0.07] bg-white/[0.02] px-3 text-sm text-white/30 cursor-not-allowed"
+                  value={profile.hire_date}
+                  onChange={(e) => setProfile((f) => ({ ...f, hire_date: e.target.value }))}
+                  className="h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-white focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30 transition-colors"
                   style={{ colorScheme: "dark" }}
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="text-xs text-white/40">備註</label>
+                <label className="text-xs text-white/40">頭像連結</label>
                 <input
-                  disabled
+                  value={profile.avatar_url}
+                  onChange={(e) => setProfile((f) => ({ ...f, avatar_url: e.target.value }))}
+                  placeholder="https://..."
+                  className="h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-white placeholder:text-white/20 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30 transition-colors"
+                />
+              </div>
+              <div className="space-y-1.5 sm:col-span-2">
+                <label className="text-xs text-white/40">備註（僅管理者可見）</label>
+                <input
+                  value={profile.note}
+                  onChange={(e) => setProfile((f) => ({ ...f, note: e.target.value }))}
                   placeholder="內部備忘..."
-                  className="h-10 w-full rounded-xl border border-white/[0.07] bg-white/[0.02] px-3 text-sm text-white/30 placeholder:text-white/20 cursor-not-allowed"
+                  className="h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-white placeholder:text-white/20 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30 transition-colors"
                 />
               </div>
             </div>
-            <p className="text-[11px] text-white/20">暱稱、電話、入職日期等欄位功能即將開放</p>
+            <div className="flex justify-end">
+              <button
+                onClick={() => profileMut.mutate()}
+                disabled={!profileDirty || !profile.nickname.trim() || profileMut.isPending}
+                className="h-9 rounded-xl bg-purple-600 px-4 text-sm font-medium text-white transition-colors hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                {profileMut.isPending && <Loader2 className="size-3.5 animate-spin" />}
+                儲存個人資料
+              </button>
+            </div>
           </div>
         </TabsContent>
 
@@ -725,8 +790,13 @@ export default function EmployeesPage() {
               user={{
                 id: selectedUser.id,
                 name: selectedUser.name,
+                nickname: selectedUser.nickname ?? selectedUser.name,
                 email: selectedUser.email,
                 idx: orgUsers.findIndex((u) => u.id === selectedUser.id),
+                phone: selectedUser.phone ?? null,
+                avatar_url: selectedUser.avatar_url ?? null,
+                note: selectedUser.note ?? null,
+                hire_date: selectedUser.hire_date ?? null,
                 home_store_id: selectedUser.home_store_id ?? null,
               }}
               token={token}

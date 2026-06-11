@@ -3,7 +3,11 @@ import type { UserDTO } from "@/lib/schedules-api";
 
 export interface UserUpdateBody {
   name?: string;
-  phone?: string;
+  nickname?: string;
+  avatar_url?: string | null;
+  note?: string | null;
+  hire_date?: string | null;
+  phone?: string | null;
   home_store_id?: string | null;
 }
 

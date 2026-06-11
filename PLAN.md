@@ -864,7 +864,7 @@ PATCH  /api/schedules/:scheduleId/assignments/:id  # 手動拖曳覆蓋
 - [ ] Email 通知系統（含截止提醒）
 - [ ] 預設時段模板（`is_default_template`）功能
 - [ ] 🆕 員工管理頁面重新設計（多選 / 篩選 / 排序 / 搜尋 / 釘選 / 分組，見 5.3.1）
-- [ ] 🆕 個人資料擴充（`nickname` / `avatar_url` / `note` / `hire_date`，見 3.1）
+- [x] 🆕 **個人資料擴充（IDEA-07）**（2026-06-11）：`User` 新增 `nickname`（NOT NULL，以 name 回填）/ `avatar_url` / `note`（僅管理者）/ `hire_date`；新增權限位 `employee.identity.view`，回應中 `name` 依檢視者權限回真實姓名或 nickname（本人/system.all/identity.view 可見真實姓名），`note` 僅 `org.employee.manage` 可見可改；payroll `user_name` 同樣分級。`/employees` 個人資料分頁改為可編輯（暱稱/電話/入職日期/頭像連結/備註 + 儲存）。含 Alembic migration `d4e5f6a7b8c9`（為既有管理身份組補授 identity.view）。見 3.1、ideas/IDEA-07.md
 - [ ] 🆕 門市管理頁面（清單 + 管理介面 + 班表檢視，見 5.3.3，含 `Store.manager_user_id` / `Store.color`）
 - [ ] 🆕 個人班表依門市分色檢視頁面（見 5.3.2，可複用現有 iCal 機制）
 - [x] 🆕 **合約模型重新設計 v2**（已決策並完成實作，2026-06-08）：FT 改填月薪、PT 改填時薪、CUSTOM 不填薪資，移除起訖時間與工時上下限欄位；含 Alembic migration `8b2e4d6f1a90`、`/employees` 編輯器重做、`PayrollReport` 計算邏輯分流。已於瀏覽器端到端驗證

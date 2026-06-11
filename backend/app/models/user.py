@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, UUID, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text, UUID, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+
+
+def _default_nickname(context) -> str:
+    return context.get_current_parameters()["name"]
 
 if TYPE_CHECKING:
     from app.models.availability import Availability, StorePreference
@@ -24,6 +28,12 @@ class User(Base):
         UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(255))
+    # Public display name — real `name` is only shown to holders of employee.identity.view.
+    nickname: Mapped[str] = mapped_column(String(255), default=_default_nickname)
+    avatar_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # Manager-only free-form note (org.employee.manage).
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hire_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # Home store — FT monthly salary is attributed only to this store in payroll reports.

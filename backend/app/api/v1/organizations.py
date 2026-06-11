@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import assert_org_access, assert_permission, get_current_user
+from app.api.deps import assert_org_access, assert_permission, get_current_user, get_user_permissions
 from app.core.database import get_db
 from app.models.organization import Organization
 from app.models.store import Store
@@ -12,7 +12,7 @@ from app.models.user import User
 from app.core.security import hash_password
 from app.schemas.organization import OrganizationCreate, OrganizationResponse, OrganizationUpdate
 from app.schemas.store import StoreCreate, StoreResponse
-from app.schemas.user import UserCreate, UserResponse
+from app.schemas.user import UserCreate, UserResponse, serialize_user
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
 
@@ -126,7 +126,8 @@ async def list_users(
     result = await db.execute(
         select(User).where(User.organization_id == org_id).order_by(User.name)
     )
-    return result.scalars().all()
+    perms = await get_user_permissions(current_user.id, db)
+    return [serialize_user(u, perms, current_user.id) for u in result.scalars().all()]
 
 
 @router.post("/{org_id}/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -150,6 +151,7 @@ async def create_user(
     user = User(
         organization_id=org_id,
         name=body.name,
+        nickname=body.nickname or body.name,
         email=body.email,
         phone=body.phone,
         hashed_password=hash_password(body.password),
@@ -157,4 +159,5 @@ async def create_user(
     db.add(user)
     await db.commit()
     await db.refresh(user)
-    return user
+    perms = await get_user_permissions(current_user.id, db)
+    return serialize_user(user, perms, current_user.id)

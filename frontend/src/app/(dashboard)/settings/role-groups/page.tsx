@@ -57,6 +57,7 @@ const PERM_GROUPS = [
       { key: "employee.preference.edit",   label: "編輯員工偏好" },
       { key: "employee.payroll.view",      label: "查看薪資報告" },
       { key: "employee.contract.edit",     label: "設定員工合約" },
+      { key: "employee.identity.view",     label: "查看員工真實姓名" },
     ],
   },
 ] as const;
