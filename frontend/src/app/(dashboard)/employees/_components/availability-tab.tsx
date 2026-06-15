@@ -1,22 +1,21 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Save, RefreshCw, Copy, Loader2, Lock, Eye } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { DAYS, DISPLAY_HOURS } from "@/lib/constants";
+import { AvailabilityGrid } from "@/components/shared/availability-grid";
 import { fetchUserAvailabilityRange, saveUserAvailability } from "@/lib/availability-api";
 
 type Slots = boolean[][];
 
 const emptySlots = (): Slots => Array.from({ length: 7 }, () => Array(24).fill(false));
-const pad2 = (n: number) => String(n).padStart(2, "0");
 
 function toLocalDateStr(d: Date) {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function getWeeks() {
@@ -95,7 +94,6 @@ export function AvailabilityTab({
   });
 
   const isLocked = lockedWeeks.has(activeWeek);
-  const readOnly = !editable || isLocked;
   const isDirty = dirtyWeeks.has(activeWeek);
   const slots = weekSlots[activeWeek] ?? emptySlots();
 
@@ -103,59 +101,6 @@ export function AvailabilityTab({
     setWeekSlots((p) => ({ ...p, [activeWeek]: s }));
     setDirtyWeeks((prev) => new Set(prev).add(activeWeek));
   }, [activeWeek]);
-
-  // ── Drag state (refs → no stale closures) ──────────────────────────────────
-  const drag = useRef({ active: false, mode: "on" as "on" | "off", origin: [0, 0] as [number, number], end: [0, 0] as [number, number] });
-  const [, force] = useState(0);
-  const tick = () => force((n) => n + 1);
-
-  const slotsRef = useRef(slots); slotsRef.current = slots;
-  const activeWeekRef = useRef(activeWeek); activeWeekRef.current = activeWeek;
-  const readOnlyRef = useRef(readOnly); readOnlyRef.current = readOnly;
-
-  useEffect(() => {
-    const commit = () => {
-      if (!drag.current.active) return;
-      const [d0, r0] = drag.current.origin;
-      const [d1, r1] = drag.current.end;
-      const base = slotsRef.current;
-      const next = base.map((r) => [...r]);
-      for (let d = Math.min(d0, d1); d <= Math.max(d0, d1); d++)
-        for (let r = Math.min(r0, r1); r <= Math.max(r0, r1); r++)
-          next[d][DISPLAY_HOURS[r]] = drag.current.mode === "on";
-      drag.current.active = false;
-      setWeekSlots((p) => ({ ...p, [activeWeekRef.current]: next }));
-      setDirtyWeeks((prev) => new Set(prev).add(activeWeekRef.current));
-      force((n) => n + 1);
-    };
-    window.addEventListener("pointerup", commit);
-    return () => window.removeEventListener("pointerup", commit);
-  }, []);
-
-  const preview = drag.current.active
-    ? {
-        dMin: Math.min(drag.current.origin[0], drag.current.end[0]),
-        dMax: Math.max(drag.current.origin[0], drag.current.end[0]),
-        rMin: Math.min(drag.current.origin[1], drag.current.end[1]),
-        rMax: Math.max(drag.current.origin[1], drag.current.end[1]),
-        mode: drag.current.mode,
-      }
-    : null;
-
-  const cellStyle = (day: number, hour: number, rowIdx: number) => {
-    const inPreview = preview && day >= preview.dMin && day <= preview.dMax && rowIdx >= preview.rMin && rowIdx <= preview.rMax;
-    if (inPreview && preview.mode === "on")
-      return { background: "rgba(99,102,241,0.45)", border: "1px solid rgba(99,102,241,0.65)" };
-    if (inPreview && preview.mode === "off")
-      return { background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)" };
-    if (slots[day][hour])
-      return { background: "rgba(124,58,237,0.55)", border: "1px solid rgba(139,92,246,0.5)" };
-    return {
-      background: (hour >= 8 && hour <= 14) ? "rgba(255,255,255,0.07)"
-        : (hour >= 15 && hour <= 22) ? "rgba(255,255,255,0.045)" : "rgba(255,255,255,0.055)",
-      border: "1px solid rgba(255,255,255,0.13)",
-    };
-  };
 
   const selectedCount = slots.flat().filter(Boolean).length;
 
@@ -191,60 +136,12 @@ export function AvailabilityTab({
         </div>
       </div>
 
-      {/* Grid */}
-      <div className="relative overflow-hidden rounded-2xl border border-white/10"
-        style={{ background: "rgba(255,255,255,0.03)", backdropFilter: "blur(12px)" }}>
-        <div
-          className="overflow-y-auto"
-          style={{ maxHeight: "calc(100dvh - 420px)", minHeight: 200, touchAction: "pan-y" }}
-          onPointerMove={(e) => {
-            if (!drag.current.active) return;
-            const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-            const cell = el?.closest("[data-day]") as HTMLElement | null;
-            if (!cell) return;
-            const d = Number(cell.dataset.day);
-            const r = Number(cell.dataset.row);
-            if (!isNaN(d) && !isNaN(r) && (drag.current.end[0] !== d || drag.current.end[1] !== r)) {
-              drag.current.end = [d, r];
-              tick();
-            }
-          }}
-        >
-          {/* Sticky header */}
-          <div className="grid grid-cols-[3rem_repeat(7,1fr)] sticky top-0 z-10 border-b border-white/10 bg-[rgba(13,13,26,0.92)] backdrop-blur-sm">
-            <div />
-            {DAYS.map((d) => (
-              <div key={d} className="py-2.5 text-center text-xs font-medium text-white/60">{d}</div>
-            ))}
-          </div>
-
-          {DISPLAY_HOURS.map((hour, rowIdx) => (
-            <div key={rowIdx} className={cn("grid grid-cols-[3rem_repeat(7,1fr)]", [7, 15, 23].includes(hour) && "border-t border-white/[0.08]")}>
-              <div className={cn("flex items-center justify-end pr-2 text-[10px]", [7, 15, 23].includes(hour) ? "text-white/50" : "text-transparent")}>
-                {`${pad2(hour)}:00`}
-              </div>
-              {DAYS.map((_, day) => (
-                <div
-                  key={day}
-                  data-day={day}
-                  data-row={rowIdx}
-                  className={cn("m-[2px] h-6 select-none rounded transition-colors duration-75", readOnly ? "cursor-default" : "cursor-pointer")}
-                  style={{ ...cellStyle(day, hour, rowIdx), touchAction: "none" }}
-                  onPointerDown={(e) => {
-                    if (readOnlyRef.current) return;
-                    e.preventDefault();
-                    drag.current = { active: true, mode: slots[day][hour] ? "off" : "on", origin: [day, rowIdx], end: [day, rowIdx] };
-                    tick();
-                  }}
-                  role="button"
-                  aria-pressed={slots[day][hour]}
-                  aria-label={`${DAYS[day]}曜 ${pad2(hour)}:00`}
-                />
-              ))}
-            </div>
-          ))}
-        </div>
-      </div>
+      <AvailabilityGrid
+        slots={slots}
+        onChange={setSlots}
+        editable={editable && !isLocked}
+        maxHeight="calc(100dvh - 420px)"
+      />
 
       {/* Actions */}
       {editable && (

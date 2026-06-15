@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, RefreshCw, Copy, Maximize2, Minimize2, Loader2, Lock } from "lucide-react";
+import { Save, RefreshCw, Copy, Loader2, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -13,7 +13,7 @@ import { fetchAvailability, saveAvailability } from "@/lib/availability-api";
 import { fetchMyPreferences, saveMyPreferences } from "@/lib/preferences-api";
 import { fetchMe, updateMe } from "@/lib/users-api";
 import { fetchStores } from "@/lib/schedules-api";
-import { DAYS, DISPLAY_HOURS } from "@/lib/constants";
+import { AvailabilityGrid as SharedAvailabilityGrid } from "@/components/shared/availability-grid";
 
 const STORE_COLORS = [
   "#7C3AED", "#2563EB", "#059669", "#D97706", "#EC4899", "#0891B2",
@@ -48,10 +48,6 @@ function getWeeks() {
 
 const emptySlots = (): Slots =>
   Array.from({ length: 7 }, () => Array(24).fill(false));
-
-function pad2(n: number) {
-  return String(n).padStart(2, "0");
-}
 
 // ─── AvailabilityGrid ──────────────────────────────────────────────────────
 
@@ -118,125 +114,6 @@ function AvailabilityGrid() {
     [activeWeek],
   );
 
-  // Fullscreen — must be declared before any useEffect that references it
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-
-  // Scroll affordance
-  const [isAtBottom, setIsAtBottom] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  // Re-evaluate when fullscreen changes (height changes → may no longer need to scroll)
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    setIsAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 32);
-  }, [isFullscreen]);
-
-  useEffect(() => {
-    const handler = () => setIsFullscreen(!!document.fullscreenElement);
-    document.addEventListener("fullscreenchange", handler);
-    return () => document.removeEventListener("fullscreenchange", handler);
-  }, []);
-
-  const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      containerRef.current?.requestFullscreen();
-    } else {
-      document.exitFullscreen();
-    }
-  };
-
-  // All drag state in refs → no stale closures, no extra re-renders
-  const drag = useRef({
-    active: false,
-    mode: "on" as "on" | "off",
-    origin: [0, 0] as [number, number],
-    end: [0, 0] as [number, number],
-  });
-  const [renderSeed, setRenderSeed] = useState(0);
-  const tick = () => setRenderSeed((n) => n + 1);
-
-  // Latest slots in a ref so the window pointerup handler is never stale
-  const slotsRef = useRef(slots);
-  slotsRef.current = slots;
-  const setWeekSlotsRef = useRef(setWeekSlots);
-  setWeekSlotsRef.current = setWeekSlots;
-  const setDirtyWeeksRef = useRef(setDirtyWeeks);
-  setDirtyWeeksRef.current = setDirtyWeeks;
-  const activeWeekRef = useRef(activeWeek);
-  activeWeekRef.current = activeWeek;
-
-  // Commit on global pointer-up (handles releasing outside the grid)
-  // origin/end store [day, rowIdx] — rowIdx is the display row (0-23), not actual hour
-  useEffect(() => {
-    const commit = () => {
-      if (!drag.current.active) return;
-      const [d0, r0] = drag.current.origin;
-      const [d1, r1] = drag.current.end;
-      const base = slotsRef.current;
-      const next = base.map((r) => [...r]);
-      for (let d = Math.min(d0, d1); d <= Math.max(d0, d1); d++)
-        for (let r = Math.min(r0, r1); r <= Math.max(r0, r1); r++)
-          next[d][DISPLAY_HOURS[r]] = drag.current.mode === "on";
-      drag.current.active = false;
-      setWeekSlotsRef.current((p) => ({ ...p, [activeWeekRef.current]: next }));
-      setDirtyWeeksRef.current((prev) => new Set(prev).add(activeWeekRef.current));
-      setRenderSeed((n) => n + 1);
-    };
-    window.addEventListener("pointerup", commit);
-    return () => window.removeEventListener("pointerup", commit);
-  }, []);
-
-  // Compute preview during drag (called at render time from refs)
-  const getPreview = () => {
-    if (!drag.current.active) return null;
-    const [d0, r0] = drag.current.origin;
-    const [d1, r1] = drag.current.end;
-    return {
-      dMin: Math.min(d0, d1),
-      dMax: Math.max(d0, d1),
-      rMin: Math.min(r0, r1),
-      rMax: Math.max(r0, r1),
-      mode: drag.current.mode,
-    };
-  };
-  const preview = getPreview();
-  void renderSeed; // consumed for re-render
-
-  const cellStyle = (day: number, hour: number, rowIdx: number) => {
-    const inPreview =
-      preview &&
-      day >= preview.dMin &&
-      day <= preview.dMax &&
-      rowIdx >= preview.rMin &&
-      rowIdx <= preview.rMax;
-
-    if (inPreview && preview.mode === "on")
-      return {
-        background: "rgba(99,102,241,0.45)",
-        border: "1px solid rgba(99,102,241,0.65)",
-      };
-    if (inPreview && preview.mode === "off")
-      return {
-        background: "rgba(255,255,255,0.02)",
-        border: "1px solid rgba(255,255,255,0.07)",
-      };
-    if (slots[day][hour])
-      return {
-        background: "rgba(124,58,237,0.55)",
-        border: "1px solid rgba(139,92,246,0.5)",
-      };
-    return {
-      background: (hour >= 8 && hour <= 14)
-        ? "rgba(255,255,255,0.07)"    // 08–14
-        : (hour >= 15 && hour <= 22)
-          ? "rgba(255,255,255,0.045)" // 15–22
-          : "rgba(255,255,255,0.055)", // 23–07
-      border: "1px solid rgba(255,255,255,0.13)",
-    };
-  };
-
   const selectedCount = slots.flat().filter(Boolean).length;
 
   return (
@@ -274,134 +151,12 @@ function AvailabilityGrid() {
         </div>
       </div>
 
-      {/* Grid card */}
-      <div
-        ref={containerRef}
-        className={cn(
-          "relative overflow-hidden border border-white/10",
-          isFullscreen ? "rounded-none" : "rounded-2xl",
-        )}
-        style={{
-          background: isFullscreen ? "#0D0D1A" : "rgba(255,255,255,0.03)",
-          backdropFilter: "blur(12px)",
-        }}
-      >
-        {/* Scroll affordance — bottom fade + hint, auto-hides when scrolled near bottom */}
-        {!isAtBottom && (
-          <div
-            className="pointer-events-none absolute bottom-0 left-0 right-0 z-20 flex flex-col items-center justify-end pb-2"
-            style={{
-              height: 56,
-              background: "linear-gradient(to bottom, transparent, rgba(13,13,26,0.92))",
-            }}
-          >
-            <span className="text-[10px] text-white/40 animate-bounce flex items-center gap-1">
-              ↓ 滑動查看更多時段
-            </span>
-          </div>
-        )}
-
-        {/* Scrollable area — header is sticky inside so scrollbar width stays consistent */}
-        <div
-          ref={scrollRef}
-          className="overflow-y-auto"
-          style={{
-            maxHeight: isFullscreen ? "calc(100dvh - 45px)" : "calc(100dvh - 390px)",
-            minHeight: 200,
-            touchAction: "pan-y",
-          }}
-          onScroll={(e) => {
-            const el = e.currentTarget;
-            setIsAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 32);
-          }}
-          onPointerMove={(e) => {
-            if (!drag.current.active) return;
-            const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-            if (!el) return;
-            const cell = el.closest("[data-day]") as HTMLElement | null;
-            if (!cell) return;
-            const d = Number(cell.dataset.day);
-            const r = Number(cell.dataset.row);
-            if (!isNaN(d) && !isNaN(r) &&
-                (drag.current.end[0] !== d || drag.current.end[1] !== r)) {
-              drag.current.end = [d, r];
-              tick();
-            }
-          }}
-        >
-          {/* In fullscreen: center content with max-width so cells don't become too wide */}
-          <div className={cn(isFullscreen && "max-w-4xl mx-auto w-full")}>
-          {/* Sticky day header — inside scroll container so scrollbar width is shared */}
-          <div className="grid grid-cols-[3rem_repeat(7,1fr)_0.75rem] sticky top-0 z-10 border-b border-white/10 bg-[rgba(13,13,26,0.92)] backdrop-blur-sm">
-            {/* Fullscreen button in first column */}
-            <button
-              onClick={toggleFullscreen}
-              className={cn(
-                "flex items-center justify-center gap-1 px-1.5 py-1.5 transition-all",
-                isFullscreen
-                  ? "rounded-md bg-white/[0.08] border border-white/[0.15] text-white/65 hover:bg-white/[0.13]"
-                  : "rounded-md rounded-tl-2xl bg-purple-600/20 border border-purple-500/30 text-purple-300 hover:bg-purple-600/32 hover:text-purple-200",
-              )}
-              aria-label={isFullscreen ? "退出全螢幕" : "全螢幕"}
-            >
-              {isFullscreen
-                ? <><Minimize2 className="size-3" /><span className="text-[9px] leading-none">縮小</span></>
-                : <><Maximize2 className="size-3" /><span className="text-[9px] leading-none">全螢</span></>}
-            </button>
-            {DAYS.map((d) => (
-              <div key={d} className="py-3 text-center text-sm font-medium text-white/60">
-                {d}
-              </div>
-            ))}
-            <div />{/* right scroll zone */}
-          </div>
-
-          {DISPLAY_HOURS.map((hour, rowIdx) => (
-            <div
-              key={rowIdx}
-              className={cn(
-                "grid grid-cols-[3rem_repeat(7,1fr)_0.75rem]",
-                [7, 15, 23].includes(hour) && "border-t border-white/[0.08]",
-              )}
-            >
-              {/* Time label */}
-              <div className={cn(
-                "flex items-center justify-end pr-2 text-[10px]",
-                [7, 15, 23].includes(hour) ? "text-white/50" : "text-transparent",
-              )}>
-                {`${pad2(hour)}:00`}
-              </div>
-
-              {/* Cells */}
-              {DAYS.map((_, day) => (
-                <div
-                  key={day}
-                  data-day={day}
-                  data-row={rowIdx}
-                  className={cn("m-[2px] h-7 select-none rounded-md transition-colors duration-75", isLocked ? "cursor-not-allowed" : "cursor-pointer")}
-                  style={{ ...cellStyle(day, hour, rowIdx), touchAction: "none" }}
-                  onPointerDown={(e) => {
-                    if (isLocked) return;
-                    e.preventDefault();
-                    drag.current = {
-                      active: true,
-                      mode: slots[day][hour] ? "off" : "on",
-                      origin: [day, rowIdx],
-                      end: [day, rowIdx],
-                    };
-                    tick();
-                  }}
-                  role="button"
-                  aria-pressed={slots[day][hour]}
-                  aria-label={`${DAYS[day]}曜 ${pad2(hour)}:00`}
-                />
-              ))}
-              <div />{/* right scroll zone */}
-            </div>
-          ))}
-          </div>{/* end fullscreen max-width wrapper */}
-        </div>
-      </div>
+      {/* Grid */}
+      <SharedAvailabilityGrid
+        slots={slots}
+        onChange={setSlots}
+        editable={!isLocked}
+      />
 
       {/* Actions */}
       <div className="flex flex-wrap gap-2">
