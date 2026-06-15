@@ -101,7 +101,28 @@ async def deactivate_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     await assert_org_access(current_user, target.organization_id, db)
     await assert_permission(current_user, "org.employee.manage", db)
+    if target.id == current_user.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot deactivate yourself")
     target.is_active = False
+    await db.commit()
+    await db.refresh(target)
+    perms = await get_user_permissions(current_user.id, db)
+    return serialize_user(target, perms, current_user.id)
+
+
+@router.patch("/{user_id}/activate", response_model=UserResponse)
+async def activate_user(
+    user_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Re-enable a previously deactivated employee (soft-delete reversal)."""
+    target = await db.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    await assert_org_access(current_user, target.organization_id, db)
+    await assert_permission(current_user, "org.employee.manage", db)
+    target.is_active = True
     await db.commit()
     await db.refresh(target)
     perms = await get_user_permissions(current_user.id, db)

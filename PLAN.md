@@ -863,7 +863,7 @@ PATCH  /api/schedules/:scheduleId/assignments/:id  # 手動拖曳覆蓋
 - [ ] 班表 PDF 匯出
 - [ ] Email 通知系統（含截止提醒）
 - [ ] 預設時段模板（`is_default_template`）功能
-- [ ] 🆕 員工管理頁面重新設計（多選 / 篩選 / 排序 / 搜尋 / 釘選 / 分組，見 5.3.1）
+- [x] 🆕 **員工管理頁面重新設計（5.3.1）**（2026-06-15）：`/employees` 大幅擴充。**清單**：搜尋（姓名/暱稱/Email）、篩選（在職狀態 / 所屬門市 / 合約類型）、排序（姓名 / 入職日）、釘選（localStorage 持久化，置頂「釘選」群組）、分組檢視（不分組 / 依門市 / 依身份組 / 在職狀態）、多選（UI 保留，批次操作待規劃）、快速新增員工對話框、啟用/停用切換（軟性，無刪除）。**詳情面板分頁**：個人資料 · 合約 · 可用時段（含門市偏好，依 `employee.availability.edit` / `employee.preference.edit` 權限可編輯/唯讀）· 班表歷史（彙整跨門市已發佈/封存班次，複用現有排班 API）· 權限（身份組賦予/移除）· 技能。**後端**：新增 `PATCH /users/{id}/activate`（含禁止停用自己）、`GET /organizations/{id}/users` 回應加入 `contract_type`（當前合約）+ `role_groups`（供清單篩選/分組）。前端 `_components/`：availability-tab、preferences-tab、permissions-tab、schedule-history-tab、add-employee-dialog。見 5.3.1
 - [x] 🆕 **個人資料擴充（IDEA-07）**（2026-06-11）：`User` 新增 `nickname`（NOT NULL，以 name 回填）/ `avatar_url` / `note`（僅管理者）/ `hire_date`；新增權限位 `employee.identity.view`，回應中 `name` 依檢視者權限回真實姓名或 nickname（本人/system.all/identity.view 可見真實姓名），`note` 僅 `org.employee.manage` 可見可改；payroll `user_name` 同樣分級。`/employees` 個人資料分頁改為可編輯（暱稱/電話/入職日期/頭像連結/備註 + 儲存）。含 Alembic migration `d4e5f6a7b8c9`（為既有管理身份組補授 identity.view）。見 3.1、ideas/IDEA-07.md
 - [ ] 🆕 門市管理頁面（清單 + 管理介面 + 班表檢視，見 5.3.3，含 `Store.manager_user_id` / `Store.color`）
 - [ ] 🆕 個人班表依門市分色檢視頁面（見 5.3.2，可複用現有 iCal 機制）

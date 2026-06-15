@@ -18,6 +18,25 @@ export const updateUser = (userId: string, body: UserUpdateBody, token: string) 
     body: JSON.stringify(body),
   });
 
+export interface UserCreateBody {
+  name: string;
+  nickname?: string | null;
+  email: string;
+  password: string;
+  phone?: string | null;
+}
+
+export const createUser = (orgId: string, body: UserCreateBody, token: string) =>
+  apiFetch<UserDTO>(`/organizations/${orgId}/users`, token, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const setUserActive = (userId: string, active: boolean, token: string) =>
+  apiFetch<UserDTO>(`/users/${userId}/${active ? "activate" : "deactivate"}`, token, {
+    method: "PATCH",
+  });
+
 export const fetchMe = (token: string) => apiFetch<UserDTO>("/users/me", token);
 
 export const updateMe = (body: UserUpdateBody, token: string) =>

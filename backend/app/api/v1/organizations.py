@@ -3,16 +3,18 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import assert_org_access, assert_permission, get_current_user, get_user_permissions
 from app.core.database import get_db
 from app.models.organization import Organization
+from app.models.role_group import UserRoleGroup
 from app.models.store import Store
 from app.models.user import User
 from app.core.security import hash_password
 from app.schemas.organization import OrganizationCreate, OrganizationResponse, OrganizationUpdate
 from app.schemas.store import StoreCreate, StoreResponse
-from app.schemas.user import UserCreate, UserResponse, serialize_user
+from app.schemas.user import RoleGroupBrief, UserCreate, UserResponse, serialize_user
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
 
@@ -124,10 +126,38 @@ async def list_users(
     await assert_org_access(current_user, org_id, db)
     await assert_permission(current_user, "org.manage", db)
     result = await db.execute(
-        select(User).where(User.organization_id == org_id).order_by(User.name)
+        select(User)
+        .where(User.organization_id == org_id)
+        .options(
+            selectinload(User.contracts),
+            selectinload(User.role_group_assignments).selectinload(UserRoleGroup.role_group),
+        )
+        .order_by(User.name)
     )
     perms = await get_user_permissions(current_user.id, db)
-    return [serialize_user(u, perms, current_user.id) for u in result.scalars().all()]
+
+    def active_contract_type(u: User) -> str | None:
+        # Current contract = the open one (effective_until is None); fall back to
+        # the most recent by effective_from. Mirrors the upsert close-and-open rule.
+        contracts = sorted(u.contracts, key=lambda c: c.effective_from)
+        if not contracts:
+            return None
+        open_ones = [c for c in contracts if c.effective_until is None]
+        chosen = open_ones[-1] if open_ones else contracts[-1]
+        return chosen.contract_type.value
+
+    return [
+        serialize_user(
+            u, perms, current_user.id,
+            contract_type=active_contract_type(u),
+            role_groups=[
+                RoleGroupBrief(id=a.role_group.id, name=a.role_group.name)
+                for a in u.role_group_assignments
+                if a.role_group is not None
+            ],
+        )
+        for u in result.scalars().all()
+    ]
 
 
 @router.post("/{org_id}/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)

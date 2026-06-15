@@ -17,3 +17,16 @@ export const saveMyPreferences = (
     method: "PUT",
     body: JSON.stringify({ preferences }),
   });
+
+export const fetchUserPreferences = (userId: string, token: string) =>
+  apiFetch<StorePreferenceDTO[]>(`/users/${userId}/preferences`, token);
+
+export const saveUserPreferences = (
+  userId: string,
+  preferences: { store_id: string; weight: number }[],
+  token: string,
+) =>
+  apiFetch<StorePreferenceDTO[]>(`/users/${userId}/preferences`, token, {
+    method: "PUT",
+    body: JSON.stringify({ preferences }),
+  });

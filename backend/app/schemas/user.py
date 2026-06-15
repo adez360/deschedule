@@ -27,6 +27,11 @@ class UserUpdate(BaseModel):
     home_store_id: uuid.UUID | None = Field(default=None)
 
 
+class RoleGroupBrief(BaseModel):
+    id: uuid.UUID
+    name: str
+
+
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -45,9 +50,20 @@ class UserResponse(BaseModel):
     home_store_id: uuid.UUID | None
     is_active: bool
     created_at: datetime
+    # Enriched (list view only): active contract type + assigned role groups.
+    # Default None/[] keeps single-user endpoints lightweight.
+    contract_type: str | None = None
+    role_groups: list[RoleGroupBrief] = []
 
 
-def serialize_user(user: "User", viewer_perms: set[str], viewer_id: uuid.UUID) -> UserResponse:
+def serialize_user(
+    user: "User",
+    viewer_perms: set[str],
+    viewer_id: uuid.UUID,
+    *,
+    contract_type: str | None = None,
+    role_groups: list[RoleGroupBrief] | None = None,
+) -> UserResponse:
     is_admin = "system.all" in viewer_perms
     show_name = is_admin or user.id == viewer_id or "employee.identity.view" in viewer_perms
     show_note = is_admin or "org.employee.manage" in viewer_perms
@@ -65,4 +81,6 @@ def serialize_user(user: "User", viewer_perms: set[str], viewer_id: uuid.UUID) -
         home_store_id=user.home_store_id,
         is_active=user.is_active,
         created_at=user.created_at,
+        contract_type=contract_type,
+        role_groups=role_groups or [],
     )

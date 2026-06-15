@@ -5,7 +5,9 @@ export interface UserDTO  {
   id: string; name: string; nickname?: string; email: string;
   phone?: string | null; avatar_url?: string | null; note?: string | null;
   hire_date?: string | null; home_store_id?: string | null;
-  daily_hour_max?: number | null;
+  daily_hour_max?: number | null; is_active?: boolean;
+  contract_type?: "FT" | "PT" | "CUSTOM" | null;
+  role_groups?: { id: string; name: string }[];
 }
 export interface AssignmentDTO {
   id: string; schedule_id: string; user_id: string; store_id: string;

@@ -14,8 +14,22 @@ export const fetchAvailability = (fromDate: string, token: string) =>
 export const fetchUserAvailability = (userId: string, week: string, token: string) =>
   apiFetch<AvailabilityDTO[]>(`/users/${userId}/availability?week=${week}`, token);
 
+export const fetchUserAvailabilityRange = (userId: string, fromDate: string, token: string) =>
+  apiFetch<AvailabilityDTO[]>(`/users/${userId}/availability?from_date=${fromDate}&weeks=4`, token);
+
 export const saveAvailability = (weekStart: string, slots: boolean[][], token: string) =>
   apiFetch<AvailabilityDTO>(`/users/me/availability/${weekStart}`, token, {
+    method: "PUT",
+    body: JSON.stringify({ slots, is_default_template: false }),
+  });
+
+export const saveUserAvailability = (
+  userId: string,
+  weekStart: string,
+  slots: boolean[][],
+  token: string,
+) =>
+  apiFetch<AvailabilityDTO>(`/users/${userId}/availability/${weekStart}`, token, {
     method: "PUT",
     body: JSON.stringify({ slots, is_default_template: false }),
   });
