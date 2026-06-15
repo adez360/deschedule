@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { fetchAvailability, saveAvailability } from "@/lib/availability-api";
 import { fetchMyPreferences, saveMyPreferences } from "@/lib/preferences-api";
+import { fetchMe, updateMe } from "@/lib/users-api";
 import { fetchStores } from "@/lib/schedules-api";
 import { DAYS, DISPLAY_HOURS } from "@/lib/constants";
 
@@ -471,6 +472,7 @@ function StorePreferences() {
 
   const [stores, setStores] = useState<Store[]>([]);
   const [isDirty, setIsDirty] = useState(false);
+  const [dailyMax, setDailyMax] = useState<string>("");
   const barRef = useRef<HTMLDivElement>(null);
   const dragging = useRef({ active: false, idx: -1 });
 
@@ -488,6 +490,16 @@ function StorePreferences() {
     enabled: !!token,
   });
 
+  const { data: me } = useQuery({
+    queryKey: ["me", token],
+    queryFn: () => fetchMe(token),
+    enabled: !!token,
+  });
+
+  useEffect(() => {
+    setDailyMax(me?.daily_hour_max != null ? String(me.daily_hour_max) : "");
+  }, [me?.daily_hour_max]);
+
   // Merge stores + preferences once both are loaded
   useEffect(() => {
     if (!storeList.length) return;
@@ -504,15 +516,20 @@ function StorePreferences() {
   // ── Save mutation ──────────────────────────────────────────────────────
 
   const saveMut = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const enabled = stores.filter((s) => s.enabled);
-      return saveMyPreferences(
+      await saveMyPreferences(
         enabled.map((s) => ({ store_id: s.id, weight: s.weight })),
         token,
       );
+      const cap = dailyMax === "" ? null : Math.max(1, Math.min(24, parseInt(dailyMax, 10)));
+      if (cap !== (me?.daily_hour_max ?? null)) {
+        await updateMe({ daily_hour_max: cap }, token);
+      }
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["myPreferences", token] });
+      qc.invalidateQueries({ queryKey: ["me", token] });
       setIsDirty(false);
       toast.success("偏好已儲存");
     },
@@ -749,6 +766,28 @@ function StorePreferences() {
               )}
             </button>
           ))}
+        </div>
+      </div>
+
+      {/* Daily scheduling cap */}
+      <div
+        className="rounded-2xl border border-white/10 p-5"
+        style={{ background: "rgba(255,255,255,0.03)", backdropFilter: "blur(12px)" }}
+      >
+        <h3 className="mb-1 text-sm font-medium text-white/50">每日排班上限</h3>
+        <p className="mb-3 text-[11px] text-white/25">自動排班時單日最多被安排的小時數，留空使用預設（8 小時）</p>
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            min={1}
+            max={24}
+            value={dailyMax}
+            placeholder="8"
+            onChange={(e) => { setDailyMax(e.target.value); setIsDirty(true); }}
+            className="h-10 w-24 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-white placeholder:text-white/20 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30 transition-colors"
+            style={{ colorScheme: "dark" }}
+          />
+          <span className="text-sm text-white/40">小時 / 日</span>
         </div>
       </div>
 

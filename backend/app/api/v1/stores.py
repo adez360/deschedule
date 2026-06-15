@@ -37,7 +37,10 @@ async def update_store(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Store not found")
     await assert_org_access(current_user, store.organization_id, db)
     await assert_permission(current_user, "org.manage", db)
-    for field, value in body.model_dump(exclude_none=True).items():
+    # exclude_unset (not exclude_none) so nullable fields can be explicitly cleared
+    for field, value in body.model_dump(exclude_unset=True).items():
+        if value is None and field not in ("address", "cross_group"):
+            continue  # name/timezone are NOT NULL
         setattr(store, field, value)
     await db.commit()
     await db.refresh(store)

@@ -21,7 +21,7 @@ from app.schemas.schedule import (
     ScheduleWithAssignments,
 )
 from app.services.payroll import create_payroll_reports
-from app.services.scheduler import load_inputs, run_greedy
+from app.services.scheduler import load_org_inputs, run_greedy_org
 
 router = APIRouter(tags=["schedules"])
 
@@ -35,10 +35,14 @@ async def _get_store_and_check(store_id: uuid.UUID, user: User, db: AsyncSession
 
 
 async def _get_schedule_with_assignments(schedule_id: uuid.UUID, db: AsyncSession) -> Schedule:
+    # populate_existing: the generate endpoint bulk-deletes assignments after the
+    # schedule was eager-loaded; with expire_on_commit=False the session would
+    # otherwise serve the stale pre-delete collection.
     result = await db.execute(
         select(Schedule)
         .options(selectinload(Schedule.assignments))
         .where(Schedule.id == schedule_id)
+        .execution_options(populate_existing=True)
     )
     schedule = result.scalar_one_or_none()
     if not schedule:
@@ -76,72 +80,100 @@ async def get_schedule(
 
 
 @router.post(
-    "/stores/{store_id}/schedules/generate",
-    response_model=ScheduleWithAssignments,
+    "/organizations/{org_id}/schedules/generate",
+    response_model=list[ScheduleWithAssignments],
     status_code=status.HTTP_201_CREATED,
 )
-async def generate_schedule(
-    store_id: uuid.UUID,
+async def generate_org_schedules(
+    org_id: uuid.UUID,
     body: GenerateScheduleRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Run the greedy scheduler for the given week.
-    - If no schedule exists yet: creates a draft.
-    - If a draft exists: deletes non-manual assignments and reruns.
-    - Published / archived schedules cannot be regenerated.
+    Org-level joint scheduling (IDEA-10): one run fills every store in the
+    organization for the given week, so an employee can never be assigned to
+    two stores in the same hour.
+
+    Per store: no schedule yet → a draft is created; draft → non-manual
+    assignments are regenerated (manual ones kept and treated as fixed);
+    published / archived → untouched, but their assignments still occupy
+    employees' hours. Returns the (re)generated draft schedules.
     """
-    await _get_store_and_check(store_id, current_user, db)
+    await assert_org_access(current_user, org_id, db)
     await assert_permission(current_user, "org.schedule.arrange", db)
 
-    existing = await db.execute(
-        select(Schedule).where(
-            Schedule.store_id == store_id,
+    stores_result = await db.execute(
+        select(Store).where(Store.organization_id == org_id).order_by(Store.created_at)
+    )
+    stores = stores_result.scalars().all()
+    if not stores:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No stores in organization")
+    store_ids = [s.id for s in stores]
+
+    existing_result = await db.execute(
+        select(Schedule)
+        .options(selectinload(Schedule.assignments))
+        .where(
+            Schedule.store_id.in_(store_ids),
             Schedule.week_start == body.week_start,
         )
     )
-    schedule = existing.scalar_one_or_none()
+    by_store = {s.store_id: s for s in existing_result.scalars().all()}
 
-    if schedule:
-        if schedule.status != ScheduleStatus.DRAFT:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Cannot regenerate a '{schedule.status}' schedule",
-            )
-        # Keep manual assignments, discard auto-generated ones
-        await db.execute(
-            delete(Assignment).where(
-                Assignment.schedule_id == schedule.id,
-                Assignment.is_manual.is_(False),
-            )
+    # Fixed occupancy: every assignment of published/archived schedules,
+    # plus manual assignments of drafts (which survive regeneration).
+    fixed: list[dict] = []
+    draft_schedules: dict[uuid.UUID, Schedule] = {}
+    for sid in store_ids:
+        schedule = by_store.get(sid)
+        if schedule is None:
+            schedule = Schedule(store_id=sid, week_start=body.week_start)
+            db.add(schedule)
+            draft_schedules[sid] = schedule
+            continue
+        if schedule.status == ScheduleStatus.DRAFT:
+            draft_schedules[sid] = schedule
+            fixed += [
+                {"user_id": a.user_id, "store_id": sid, "day": a.day, "hour": a.hour}
+                for a in schedule.assignments if a.is_manual
+            ]
+        else:
+            fixed += [
+                {"user_id": a.user_id, "store_id": sid, "day": a.day, "hour": a.hour}
+                for a in schedule.assignments
+            ]
+
+    await db.flush()  # resolve new schedule ids before adding children
+
+    draft_ids = [s.id for s in draft_schedules.values()]
+    await db.execute(
+        delete(Assignment).where(
+            Assignment.schedule_id.in_(draft_ids),
+            Assignment.is_manual.is_(False),
         )
-    else:
-        schedule = Schedule(store_id=store_id, week_start=body.week_start)
-        db.add(schedule)
-        await db.flush()  # resolve schedule.id before adding children
+    )
 
-    demand_slots, user_ids, avail_slots, pref_weights, skill_demand_slots, user_skills = await load_inputs(
-        store_id, body.week_start, db
-    )
-    raw = run_greedy(
-        user_ids, demand_slots, avail_slots, pref_weights, skill_demand_slots, user_skills
-    )
+    inputs = await load_org_inputs(org_id, body.week_start, db)
+    raw = run_greedy_org(inputs, target_store_ids=list(draft_schedules), fixed=fixed)
 
     for a in raw:
         db.add(Assignment(
-            schedule_id=schedule.id,
+            schedule_id=draft_schedules[a["store_id"]].id,
             user_id=a["user_id"],
-            store_id=store_id,
+            store_id=a["store_id"],
             day=a["day"],
             hour=a["hour"],
             is_manual=False,
         ))
 
     await db.commit()
-    return ScheduleWithAssignments.model_validate(
-        await _get_schedule_with_assignments(schedule.id, db)
-    )
+    return [
+        ScheduleWithAssignments.model_validate(
+            await _get_schedule_with_assignments(sched_id, db)
+        )
+        for sched_id in draft_ids
+    ]
 
 
 @router.patch("/schedules/{schedule_id}/status", response_model=ScheduleResponse)

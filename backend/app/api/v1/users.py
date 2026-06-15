@@ -28,7 +28,9 @@ async def update_me(
 ):
     await assert_permission(current_user, "self.profile.edit", db)
     perms = await get_user_permissions(current_user.id, db)
-    data = body.model_dump(exclude_none=True)
+    # exclude_unset → proper PATCH: only fields the client sent, so nullable
+    # fields (daily_hour_max, home_store_id…) can be explicitly cleared to null
+    data = body.model_dump(exclude_unset=True)
     # note is a manager-only field; ignore it on self-service updates
     if "system.all" not in perms and "org.employee.manage" not in perms:
         data.pop("note", None)

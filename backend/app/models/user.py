@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text, UUID, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UUID, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -34,6 +34,8 @@ class User(Base):
     # Manager-only free-form note (org.employee.manage).
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     hire_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Per-employee daily scheduling cap; NULL = system default (scheduler.DAILY_HOUR_MAX)
+    daily_hour_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # Home store — FT monthly salary is attributed only to this store in payroll reports.

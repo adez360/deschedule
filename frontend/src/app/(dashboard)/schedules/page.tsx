@@ -18,7 +18,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   fetchStores, fetchOrgUsers, fetchScheduleList, fetchScheduleDetail,
-  generateSchedule, updateScheduleStatus, createAssignment, deleteAssignment,
+  generateSchedules, updateScheduleStatus, createAssignment, deleteAssignment,
   buildEmployeeRows, buildActual,
   type StoreDTO, type EmployeeRow, type AssignmentDTO, type UserDTO,
 } from "@/lib/schedules-api";
@@ -927,11 +927,12 @@ export default function SchedulesPage() {
   // ── Mutations ─────────────────────────────────────────────────────────────
 
   const generateMutation = useMutation({
-    mutationFn: () => generateSchedule(storeId, weekStartStr, token),
+    // IDEA-10: joint org-level run — fills every store's draft for this week at once
+    mutationFn: () => generateSchedules(orgId, weekStartStr, token),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["scheduleList", storeId] });
+      queryClient.invalidateQueries({ queryKey: ["scheduleList"] });
       queryClient.invalidateQueries({ queryKey: ["scheduleDetail"] });
-      toast.success("自動排班完成");
+      toast.success("自動排班完成（全組織聯合排班）");
     },
     onError: (e: Error) => toast.error(`排班失敗：${e.message}`),
   });
@@ -1030,6 +1031,7 @@ export default function SchedulesPage() {
           }}
           onClick={() => generateMutation.mutate()}
           disabled={isMutating || status === "published" || status === "archived"}
+          title="全組織聯合排班：一次排當週所有門市的草稿班表"
         >
           {generateMutation.isPending
             ? <Loader2 className="size-4 animate-spin" />

@@ -28,6 +28,9 @@ class Store(Base):
     name: Mapped[str] = mapped_column(String(255))
     address: Mapped[str | None] = mapped_column(String(500), nullable=True)
     timezone: Mapped[str] = mapped_column(String(64), default="Asia/Taipei")
+    # IDEA-10 G1: stores sharing the same non-null label can cross-schedule;
+    # NULL = this store does not participate in cross-store scheduling.
+    cross_group: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     organization: Mapped[Organization] = relationship("Organization", back_populates="stores")

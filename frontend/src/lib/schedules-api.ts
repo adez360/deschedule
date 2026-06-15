@@ -1,10 +1,11 @@
 import { apiFetch } from "@/lib/api-client";
 
-export interface StoreDTO { id: string; name: string; timezone: string }
+export interface StoreDTO { id: string; name: string; timezone: string; cross_group?: string | null }
 export interface UserDTO  {
   id: string; name: string; nickname?: string; email: string;
   phone?: string | null; avatar_url?: string | null; note?: string | null;
   hire_date?: string | null; home_store_id?: string | null;
+  daily_hour_max?: number | null;
 }
 export interface AssignmentDTO {
   id: string; schedule_id: string; user_id: string; store_id: string;
@@ -33,8 +34,9 @@ export const fetchScheduleList = (storeId: string, token: string) =>
 export const fetchScheduleDetail = (scheduleId: string, token: string) =>
   apiFetch<ScheduleDetailDTO>(`/schedules/${scheduleId}`, token);
 
-export const generateSchedule = (storeId: string, weekStart: string, token: string) =>
-  apiFetch<ScheduleDetailDTO>(`/stores/${storeId}/schedules/generate`, token, {
+/** Org-level joint scheduling (IDEA-10): regenerates every draft schedule in the org for the week. */
+export const generateSchedules = (orgId: string, weekStart: string, token: string) =>
+  apiFetch<ScheduleDetailDTO[]>(`/organizations/${orgId}/schedules/generate`, token, {
     method: "POST",
     body: JSON.stringify({ week_start: weekStart }),
   });

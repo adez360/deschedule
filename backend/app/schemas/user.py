@@ -22,6 +22,7 @@ class UserUpdate(BaseModel):
     avatar_url: str | None = Field(default=None, max_length=1024)
     note: str | None = Field(default=None, max_length=2000)
     hire_date: date | None = None
+    daily_hour_max: int | None = Field(default=None, ge=1, le=24)
     phone: str | None = Field(default=None, max_length=32)
     home_store_id: uuid.UUID | None = Field(default=None)
 
@@ -38,6 +39,7 @@ class UserResponse(BaseModel):
     avatar_url: str | None
     note: str | None  # manager-only (org.employee.manage); null for others
     hire_date: date | None
+    daily_hour_max: int | None
     email: EmailStr
     phone: str | None
     home_store_id: uuid.UUID | None
@@ -57,6 +59,7 @@ def serialize_user(user: "User", viewer_perms: set[str], viewer_id: uuid.UUID) -
         avatar_url=user.avatar_url,
         note=user.note if show_note else None,
         hire_date=user.hire_date,
+        daily_hour_max=user.daily_hour_max,
         email=user.email,
         phone=user.phone,
         home_store_id=user.home_store_id,

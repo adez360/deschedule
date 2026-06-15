@@ -27,7 +27,7 @@ const TIMEZONES = [
   "Asia/Hong_Kong", "Asia/Singapore", "Asia/Seoul", "UTC",
 ];
 
-const DEFAULT_FORM: StoreBody = { name: "", timezone: "Asia/Taipei" };
+const DEFAULT_FORM: StoreBody = { name: "", timezone: "Asia/Taipei", cross_group: "" };
 
 // ─── Store Dialog (add + edit) ───────────────────────────────────────────────
 
@@ -44,12 +44,16 @@ function StoreDialog({
   const [form, setForm] = useState<StoreBody>(DEFAULT_FORM);
 
   useEffect(() => {
-    if (open) setForm(initial ? { name: initial.name, timezone: initial.timezone } : DEFAULT_FORM);
+    if (open) setForm(initial
+      ? { name: initial.name, timezone: initial.timezone, cross_group: initial.cross_group ?? "" }
+      : DEFAULT_FORM);
   }, [open, initial]);
 
   const saveMut = useMutation({
-    mutationFn: () =>
-      initial ? updateStore(initial.id, form, token) : createStore(orgId, form, token),
+    mutationFn: () => {
+      const body = { ...form, cross_group: form.cross_group?.trim() || null };
+      return initial ? updateStore(initial.id, body, token) : createStore(orgId, body, token);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["stores", orgId] });
       toast.success(initial ? "門市已更新" : "門市已新增");
@@ -93,6 +97,18 @@ function StoreDialog({
                 ))}
               </SelectContent>
             </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs text-white/40">跨店群組</label>
+            <input
+              type="text"
+              value={form.cross_group ?? ""}
+              onChange={(e) => setForm((p) => ({ ...p, cross_group: e.target.value }))}
+              placeholder="例如：北區（留空 = 不跨店）"
+              className="w-full h-10 rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-white placeholder:text-white/20 focus:border-purple-500/50 focus:outline-none focus:ring-1 focus:ring-purple-500/30 transition-colors"
+            />
+            <p className="text-[11px] text-white/25">同群組的門市可互相跨店排班；未設群組的門市只排自己的員工</p>
           </div>
         </div>
 
@@ -233,6 +249,12 @@ export default function StoresPage() {
                     <p className="text-[11px] text-white/30 truncate">{store.timezone}</p>
                   </div>
                 </div>
+                {store.cross_group && (
+                  <span className="flex-shrink-0 rounded-full px-2 py-0.5 text-[11px] text-purple-300"
+                    style={{ background: "rgba(124,58,237,0.18)" }}>
+                    {store.cross_group}
+                  </span>
+                )}
               </div>
 
               <div className="flex items-center gap-1 pt-2.5 border-t border-white/[0.06]">

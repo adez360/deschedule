@@ -6,6 +6,7 @@ export type { StoreDTO };
 export interface StoreBody {
   name: string;
   timezone: string;
+  cross_group?: string | null;
 }
 
 export const createStore = (orgId: string, body: StoreBody, token: string) =>
