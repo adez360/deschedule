@@ -64,6 +64,23 @@ services:
         condition: service_healthy
     command: celery -A app.worker worker --loglevel=info
 
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    volumes:
+      - ./backend:/app
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-schedule_user}:${POSTGRES_PASSWORD:-changeme}@db:5432/${POSTGRES_DB:-schedule_db}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.worker beat --loglevel=info
+
   frontend:
     build:
       context: ./frontend

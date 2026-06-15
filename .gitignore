@@ -12,6 +12,10 @@ venv/
 dist/
 build/
 
+# Celery runtime state
+celerybeat-schedule
+celerybeat.pid
+
 # Node
 node_modules/
 .next/

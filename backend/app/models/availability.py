@@ -18,7 +18,9 @@ if TYPE_CHECKING:
 class Availability(Base):
     """
     slots: bool[7][24] — index 0 = Monday 00:00.
-    Employees can fill up to N weeks ahead; missing weeks auto-copy from the default template.
+    A concrete week's availability. Missing weeks are auto-materialized from the
+    employee's AvailabilityTemplate by the weekly Friday job (IDEA-11); rows it
+    creates have auto_filled = True until the employee edits the week manually.
     """
     __tablename__ = "availabilities"
     __table_args__ = (UniqueConstraint("user_id", "week_start", name="uq_availability_user_week"),)
@@ -29,13 +31,33 @@ class Availability(Base):
     )
     week_start: Mapped[date] = mapped_column(Date, nullable=False)  # always a Monday
     slots: Mapped[Any] = mapped_column(JSONB, nullable=False)        # bool[7][24]
-    is_default_template: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_filled: Mapped[bool] = mapped_column(Boolean, default=False)  # copied from template, not yet hand-edited
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
     user: Mapped[User] = relationship("User", back_populates="availabilities")
+
+
+class AvailabilityTemplate(Base):
+    """
+    Employee's standing weekly availability (IDEA-11, decision G2). One per user.
+    slots: bool[7][24] — index 0 = Monday 00:00. The weekly Friday job copies this
+    into next week's Availability when that week has no row yet.
+    """
+    __tablename__ = "availability_templates"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), unique=True, nullable=False, index=True
+    )
+    slots: Mapped[Any] = mapped_column(JSONB, nullable=False)  # bool[7][24]
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    user: Mapped[User] = relationship("User", back_populates="availability_template")
 
 
 class StorePreference(Base):

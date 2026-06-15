@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -11,12 +12,14 @@ from app.models.organization import Organization
 from app.models.role_group import UserRoleGroup
 from app.models.store import Store
 from app.models.user import User
-from app.core.security import hash_password
 from app.schemas.organization import OrganizationCreate, OrganizationResponse, OrganizationUpdate
 from app.schemas.store import StoreCreate, StoreResponse
-from app.schemas.user import RoleGroupBrief, UserCreate, UserResponse, serialize_user
+from app.schemas.user import InviteResponse, RoleGroupBrief, UserCreate, UserResponse, serialize_user
 
 router = APIRouter(prefix="/organizations", tags=["organizations"])
+
+# Onboarding invite links are valid for one week (IDEA-12 D1).
+INVITE_TTL_DAYS = 7
 
 
 @router.get("", response_model=list[OrganizationResponse])
@@ -160,13 +163,15 @@ async def list_users(
     ]
 
 
-@router.post("/{org_id}/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/{org_id}/users", response_model=InviteResponse, status_code=status.HTTP_201_CREATED)
 async def create_user(
     org_id: uuid.UUID,
     body: UserCreate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Create an invited (pending) employee. No password is set — an invite
+    token is issued instead; the employee onboards via /onboard (IDEA-12)."""
     await assert_org_access(current_user, org_id, db)
     await assert_permission(current_user, "org.manage", db)
 
@@ -184,10 +189,44 @@ async def create_user(
         nickname=body.nickname or body.name,
         email=body.email,
         phone=body.phone,
-        hashed_password=hash_password(body.password),
+        hashed_password=None,
+        invite_token=uuid.uuid4(),
+        invite_expires_at=datetime.now(timezone.utc) + timedelta(days=INVITE_TTL_DAYS),
     )
     db.add(user)
     await db.commit()
     await db.refresh(user)
     perms = await get_user_permissions(current_user.id, db)
-    return serialize_user(user, perms, current_user.id)
+    return InviteResponse(
+        user=serialize_user(user, perms, current_user.id),
+        invite_token=user.invite_token,
+        invite_expires_at=user.invite_expires_at,
+    )
+
+
+@router.post("/{org_id}/users/{user_id}/resend-invite", response_model=InviteResponse)
+async def resend_invite(
+    org_id: uuid.UUID,
+    user_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Issue a fresh onboarding token. Works for pending employees (re-invite)
+    and for active ones (doubles as a simple password reset — IDEA-12 F)."""
+    await assert_org_access(current_user, org_id, db)
+    await assert_permission(current_user, "org.manage", db)
+
+    user = await db.get(User, user_id)
+    if not user or user.organization_id != org_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    user.invite_token = uuid.uuid4()
+    user.invite_expires_at = datetime.now(timezone.utc) + timedelta(days=INVITE_TTL_DAYS)
+    await db.commit()
+    await db.refresh(user)
+    perms = await get_user_permissions(current_user.id, db)
+    return InviteResponse(
+        user=serialize_user(user, perms, current_user.id),
+        invite_token=user.invite_token,
+        invite_expires_at=user.invite_expires_at,
+    )

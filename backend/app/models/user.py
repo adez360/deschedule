@@ -14,7 +14,7 @@ def _default_nickname(context) -> str:
     return context.get_current_parameters()["name"]
 
 if TYPE_CHECKING:
-    from app.models.availability import Availability, StorePreference
+    from app.models.availability import Availability, AvailabilityTemplate, StorePreference
     from app.models.payroll import EmployeeContract
     from app.models.role_group import UserRoleGroup
     from app.models.skill import UserSkill
@@ -42,7 +42,17 @@ class User(Base):
     home_store_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("stores.id", ondelete="SET NULL"), nullable=True
     )
-    hashed_password: Mapped[str] = mapped_column(String(255))
+    # NULL while the account is invited-but-not-yet-onboarded (IDEA-12). The
+    # employee sets it themselves via the /onboard token flow.
+    hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # One-time onboarding / password-reset token (IDEA-12). Non-null = a pending
+    # invite link is outstanding; cleared once the employee finishes onboarding.
+    invite_token: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), unique=True, index=True, nullable=True
+    )
+    invite_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     calendar_token: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), unique=True, nullable=False, default=uuid.uuid4
@@ -53,6 +63,9 @@ class User(Base):
         "UserRoleGroup", back_populates="user"
     )
     availabilities: Mapped[list[Availability]] = relationship("Availability", back_populates="user")
+    availability_template: Mapped[AvailabilityTemplate | None] = relationship(
+        "AvailabilityTemplate", back_populates="user", uselist=False
+    )
     preferences: Mapped[list[StorePreference]] = relationship("StorePreference", back_populates="user")
     contracts: Mapped[list[EmployeeContract]] = relationship("EmployeeContract", back_populates="user")
     skill_assignments: Mapped[list[UserSkill]] = relationship("UserSkill", back_populates="user")

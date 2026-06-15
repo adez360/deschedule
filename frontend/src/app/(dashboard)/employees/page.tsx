@@ -6,7 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Save, Loader2, Users, ChevronLeft, ChevronDown, ChevronRight,
   History, Wrench, Check, Search, UserRound, FileText, X, Building2,
-  Star, ShieldCheck, CalendarClock, Clock, SlidersHorizontal,
+  Star, ShieldCheck, CalendarClock, Clock, SlidersHorizontal, Copy, MailWarning,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -16,7 +16,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { fetchOrgUsers, fetchStores, type StoreDTO, type UserDTO } from "@/lib/schedules-api";
-import { updateUser, setUserActive } from "@/lib/users-api";
+import { updateUser, setUserActive, resendInvite, onboardUrl } from "@/lib/users-api";
 import {
   fetchActiveContract, fetchUserContracts, upsertContract,
   type ContractDTO, type ContractType, type ContractSetBody,
@@ -124,7 +124,7 @@ type DetailUser = {
   id: string; name: string; nickname: string; email: string; idx: number;
   phone: string | null; avatar_url: string | null; note: string | null;
   hire_date: string | null; home_store_id: string | null;
-  daily_hour_max: number | null; is_active: boolean;
+  daily_hour_max: number | null; is_active: boolean; is_pending: boolean;
 };
 
 function DetailPanel({
@@ -231,6 +231,20 @@ function DetailPanel({
     onError: (e: Error) => toast.error(`操作失敗：${e.message}`),
   });
 
+  // Re-issue an onboarding link and copy it (pending = re-invite; active = password reset).
+  const inviteMut = useMutation({
+    mutationFn: () => resendInvite(orgId, user.id, token),
+    onSuccess: async (res) => {
+      try {
+        await navigator.clipboard.writeText(onboardUrl(res.invite_token));
+        toast.success("已複製新的邀請連結（7 天內有效）");
+      } catch {
+        toast.success("已產生新邀請連結，但複製失敗，請重試");
+      }
+    },
+    onError: (e: Error) => toast.error(`操作失敗：${e.message}`),
+  });
+
   const isNew = !activeContract && !contractLoading;
 
   const saveMut = useMutation({
@@ -295,12 +309,29 @@ function DetailPanel({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h2 className="text-base font-semibold text-white truncate">{user.name}</h2>
+            {user.is_pending && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded border border-amber-400/30 bg-amber-400/10 text-amber-300/90 flex-shrink-0 flex items-center gap-1">
+                <MailWarning className="size-2.5" />待啟用
+              </span>
+            )}
             {!user.is_active && (
               <span className="text-[10px] px-1.5 py-0.5 rounded border border-white/15 bg-white/8 text-white/45 flex-shrink-0">停用</span>
             )}
           </div>
           <p className="text-xs text-white/40 truncate">{user.email}</p>
         </div>
+        {/* Invite link (manager-only): re-invite pending, or reset password for active */}
+        {perms.manage && (
+          <button
+            onClick={() => inviteMut.mutate()}
+            disabled={inviteMut.isPending}
+            title={user.is_pending ? "複製邀請連結" : "產生密碼重設連結"}
+            className="flex h-8 flex-shrink-0 items-center gap-1.5 rounded-lg border border-white/10 px-2.5 text-xs text-white/60 transition-colors hover:bg-white/5 disabled:opacity-40"
+          >
+            {inviteMut.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Copy className="size-3.5" />}
+            {user.is_pending ? "邀請連結" : "重設密碼"}
+          </button>
+        )}
         {/* Status toggle */}
         {perms.employeeManage && (
           <div className="flex items-center gap-2 flex-shrink-0">
@@ -790,6 +821,11 @@ function EmployeeRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <p className="text-sm font-medium text-white truncate">{user.name}</p>
+          {user.is_pending && (
+            <span className="text-[9px] px-1 py-0.5 rounded border border-amber-400/30 bg-amber-400/10 text-amber-300/90 flex-shrink-0 flex items-center gap-0.5">
+              <MailWarning className="size-2.5" />待啟用
+            </span>
+          )}
           <ContractBadge type={user.contract_type} />
         </div>
         <p className="text-[11px] text-white/30 truncate">{user.email}</p>
@@ -1174,6 +1210,7 @@ export default function EmployeesPage() {
                 home_store_id: selectedUser.home_store_id ?? null,
                 daily_hour_max: selectedUser.daily_hour_max ?? null,
                 is_active: selectedUser.is_active !== false,
+                is_pending: selectedUser.is_pending === true,
               }}
               token={token}
               orgId={orgId}

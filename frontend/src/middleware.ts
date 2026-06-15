@@ -6,7 +6,8 @@ export default auth((req) => {
   const { pathname } = req.nextUrl;
 
   const isAuthRoute = pathname === "/login";
-  const isPublicRoute = pathname === "/";
+  // "/" and the token-gated employee onboarding flow are reachable without auth.
+  const isPublicRoute = pathname === "/" || pathname.startsWith("/onboard");
 
   if (!isLoggedIn && !isAuthRoute && !isPublicRoute) {
     return NextResponse.redirect(new URL("/login", req.url));

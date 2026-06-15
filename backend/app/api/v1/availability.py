@@ -7,9 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import assert_org_access, assert_permission, get_current_user
 from app.core.database import get_db
-from app.models.availability import Availability
+from app.models.availability import Availability, AvailabilityTemplate
 from app.models.user import User
-from app.schemas.availability import AvailabilityResponse, AvailabilitySet
+from app.schemas.availability import (
+    AvailabilityResponse,
+    AvailabilitySet,
+    AvailabilityTemplateResponse,
+    AvailabilityTemplateSet,
+)
 
 router = APIRouter(tags=["availability"])
 
@@ -22,15 +27,25 @@ def _assert_monday(d: date) -> None:
         )
 
 
-async def _unset_default_template(user_id: uuid.UUID, db: AsyncSession) -> None:
+async def _get_template(user_id: uuid.UUID, db: AsyncSession) -> AvailabilityTemplate | None:
     result = await db.execute(
-        select(Availability).where(
-            Availability.user_id == user_id,
-            Availability.is_default_template.is_(True),
-        )
+        select(AvailabilityTemplate).where(AvailabilityTemplate.user_id == user_id)
     )
-    for av in result.scalars().all():
-        av.is_default_template = False
+    return result.scalar_one_or_none()
+
+
+async def _upsert_template(
+    user_id: uuid.UUID, slots: list[list[bool]], db: AsyncSession
+) -> AvailabilityTemplate:
+    tmpl = await _get_template(user_id, db)
+    if tmpl:
+        tmpl.slots = slots
+    else:
+        tmpl = AvailabilityTemplate(user_id=user_id, slots=slots)
+        db.add(tmpl)
+    await db.commit()
+    await db.refresh(tmpl)
+    return tmpl
 
 
 async def _get_weeks(
@@ -101,24 +116,40 @@ async def set_my_availability(
     if av and av.locked:
         raise HTTPException(status_code=423, detail="Availability is locked")
 
-    if body.is_default_template:
-        await _unset_default_template(current_user.id, db)
-
     if av:
         av.slots = body.slots
-        av.is_default_template = body.is_default_template
+        av.auto_filled = False  # hand-edited → no longer an auto-fill from template
     else:
         av = Availability(
             user_id=current_user.id,
             week_start=week_start,
             slots=body.slots,
-            is_default_template=body.is_default_template,
         )
         db.add(av)
 
     await db.commit()
     await db.refresh(av)
     return av
+
+
+# ── /users/me/availability-template ──────────────────────────────────────────
+
+@router.get("/users/me/availability-template", response_model=AvailabilityTemplateResponse | None)
+async def get_my_template(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _get_template(current_user.id, db)
+
+
+@router.put("/users/me/availability-template", response_model=AvailabilityTemplateResponse)
+async def set_my_template(
+    body: AvailabilityTemplateSet,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await assert_permission(current_user, "self.availability.edit", db)
+    return await _upsert_template(current_user.id, body.slots, db)
 
 
 # ── /users/{user_id}/availability  (admin) ────────────────────────────────────
@@ -180,24 +211,57 @@ async def set_user_availability(
     )
     av = result.scalar_one_or_none()
 
-    if body.is_default_template:
-        await _unset_default_template(user_id, db)
-
     if av:
         av.slots = body.slots
-        av.is_default_template = body.is_default_template
+        av.auto_filled = False
     else:
         av = Availability(
             user_id=user_id,
             week_start=week_start,
             slots=body.slots,
-            is_default_template=body.is_default_template,
         )
         db.add(av)
 
     await db.commit()
     await db.refresh(av)
     return av
+
+
+# ── /users/{user_id}/availability-template  (admin) ───────────────────────────
+
+@router.get(
+    "/users/{user_id}/availability-template",
+    response_model=AvailabilityTemplateResponse | None,
+)
+async def get_user_template(
+    user_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    target = await db.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    await assert_org_access(current_user, target.organization_id, db)
+    await assert_permission(current_user, "employee.availability.edit", db)
+    return await _get_template(user_id, db)
+
+
+@router.put(
+    "/users/{user_id}/availability-template",
+    response_model=AvailabilityTemplateResponse,
+)
+async def set_user_template(
+    user_id: uuid.UUID,
+    body: AvailabilityTemplateSet,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    target = await db.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    await assert_org_access(current_user, target.organization_id, db)
+    await assert_permission(current_user, "employee.availability.edit", db)
+    return await _upsert_template(user_id, body.slots, db)
 
 
 @router.patch("/users/{user_id}/availability/{week_start}/lock", response_model=AvailabilityResponse)

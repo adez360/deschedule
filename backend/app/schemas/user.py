@@ -9,10 +9,11 @@ if TYPE_CHECKING:
 
 
 class UserCreate(BaseModel):
+    # No password — the employee sets it themselves via the /onboard invite
+    # flow (IDEA-12). The manager only seeds identity + contact.
     name: str = Field(min_length=1, max_length=255)
     nickname: str | None = Field(default=None, min_length=1, max_length=255)
     email: EmailStr
-    password: str = Field(min_length=8)
     phone: str | None = Field(default=None, max_length=32)
 
 
@@ -49,11 +50,22 @@ class UserResponse(BaseModel):
     phone: str | None
     home_store_id: uuid.UUID | None
     is_active: bool
+    # True while invited but not yet onboarded (no password set) — IDEA-12.
+    is_pending: bool = False
     created_at: datetime
     # Enriched (list view only): active contract type + assigned role groups.
     # Default None/[] keeps single-user endpoints lightweight.
     contract_type: str | None = None
     role_groups: list[RoleGroupBrief] = []
+
+
+class InviteResponse(BaseModel):
+    """Returned on create / resend-invite so the manager can hand the link to
+    the employee (IDEA-12 A1 — copy link, no email yet)."""
+
+    user: UserResponse
+    invite_token: uuid.UUID
+    invite_expires_at: datetime
 
 
 def serialize_user(
@@ -80,6 +92,7 @@ def serialize_user(
         phone=user.phone,
         home_store_id=user.home_store_id,
         is_active=user.is_active,
+        is_pending=user.hashed_password is None,
         created_at=user.created_at,
         contract_type=contract_type,
         role_groups=role_groups or [],

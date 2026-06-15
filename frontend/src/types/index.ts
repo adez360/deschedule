@@ -89,8 +89,15 @@ export interface Availability {
   user_id: string;
   week_start: string;
   slots: AvailabilitySlots;
-  is_default_template: boolean;
+  auto_filled: boolean;
   locked: boolean;
+  updated_at: string;
+}
+
+export interface AvailabilityTemplate {
+  id: string;
+  user_id: string;
+  slots: AvailabilitySlots;
   updated_at: string;
 }
 

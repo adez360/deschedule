@@ -112,9 +112,14 @@ User
 ├── organization_id: UUID（FK）
 ├── home_store_id: UUID | null（FK → Store；🆕 IDEA-06：FT 月薪只計入此「所屬門市」，見 5.1.5）
 ├── role_groups: RoleGroup[]（多對多）
+├── hashed_password: string | null（🆕 IDEA-12：待啟用期間為 null，員工自行設定）
+├── invite_token: UUID | null（🆕 IDEA-12：一次性入職／密碼重設權杖）
+├── invite_expires_at: timestamp | null（🆕 IDEA-12：權杖有效期，7 天）
 ├── is_active: boolean
 └── created_at: timestamp
 ```
+
+> ✅ **已實作（2026-06-15，IDEA-12 員工註冊／入職）**：管理者不再為員工設定密碼。`POST /organizations/{org}/users` 不收 `password`，改建立「待啟用」帳號（`hashed_password=NULL`、`is_active=True`）並產生一次性 `invite_token`（+ `invite_expires_at`，7 天）。`hashed_password` 改為 nullable（migration `b3c4d5e6f7a8`）。待啟用狀態 `is_pending = hashed_password IS NULL`，與 `is_active`（停用／soft-delete）分離。員工透過公開的 `/onboard?token=…` 頁自設密碼 + 確認個資後啟用。`resend-invite` 可重發權杖（pending 重新邀請、active 視為密碼重設）。詳見 5.3.5 與 `ideas/idea-12-employee-registration-onboarding.md`。
 
 > ✅ **已實作（2026-06-11，IDEA-06）**：新增 `home_store_id`（Alembic migration `c3d4e5f6a7b8`，`ON DELETE SET NULL`）。全職（FT）員工的月薪僅歸屬於此門市的薪資報表（顯示層歸屬，`PayrollReport` 仍逐門市保存月薪快照）。暫於 `/employees → 個人資料` 分頁以下拉選單設定（`PATCH /users/{userId}`，改用 `exclude_unset` 語意以支援設定或清除為 null）。
 
@@ -640,6 +645,17 @@ score(assignment) = preference_weight(employee, store) × availability(employee,
 - 建議實作為獨立的唯讀資料視圖 / API（例如 `GET /api/stores/:storeId/schedules/:scheduleId/ai-review-context`），明確排除敏感欄位，而非直接授予 AI 服務帳號既有權限
 - 列為 **Phase 3 以後**低優先度項目
 
+#### 5.3.5 員工註冊／入職流程 ✅ 已實作（2026-06-15，IDEA-12）
+
+邀請制（非公開註冊）：管理者建立帳號發起，員工自行完成設定密碼與啟用。
+
+1. **管理者建帳號**：`/employees` 快速新增只填姓名 + email（+ 暱稱／電話），**不再設定密碼**；建立後產生一次性邀請連結（7 天有效），管理者複製後自行傳給員工（A1，尚未接 email）。
+2. **待啟用狀態**：帳號 `is_pending`（無密碼），與「停用」（`is_active`）區分；清單與詳情以 amber「待啟用」標籤顯示。
+3. **員工入職**：開啟公開頁 `/onboard?token=…`（無需登入，權杖即憑證）→ 確認 email、補齊姓名／暱稱／電話、設定密碼 → 啟用帳號並導向登入。
+4. **重發 / 忘記密碼（簡化）**：管理者於員工詳情按「邀請連結 / 重設密碼」重發權杖；對待啟用員工＝重新邀請，對已啟用員工＝密碼重設（員工經同一 `/onboard` 流程設新密碼）。目前無員工自助「忘記密碼」入口（需 email 服務，待 Phase 2）。
+
+> 決策 **A1+B1+C2+D1+E2+F（簡化）**，完整提案與決策見 `ideas/idea-12-employee-registration-onboarding.md`。
+
 ---
 
 ## 6. 通知系統
@@ -740,11 +756,16 @@ POST   /api/auth/login
 GET    /api/users/me
 PATCH  /api/users/me
 
+# 員工入職（IDEA-12；公開，權杖即憑證，無需登入）
+GET    /api/onboard/:token                          ← 取得入職基本資訊（確認帳號）
+POST   /api/onboard/:token                          ← 設定密碼 + 補個資 → 啟用、作廢權杖
+
 # 組織 & 門市
 GET    /api/organizations/:orgId/stores
 POST   /api/organizations/:orgId/stores
 GET    /api/organizations/:orgId/users
-POST   /api/organizations/:orgId/users
+POST   /api/organizations/:orgId/users              ← 建立待啟用員工，回傳邀請連結（IDEA-12，不收密碼）
+POST   /api/organizations/:orgId/users/:userId/resend-invite  ← 重發權杖（重新邀請／密碼重設）
 GET    /api/stores/:storeId
 PATCH  /api/stores/:storeId
 DELETE /api/stores/:storeId
@@ -865,6 +886,7 @@ PATCH  /api/schedules/:scheduleId/assignments/:id  # 手動拖曳覆蓋
 - [ ] 預設時段模板（`is_default_template`）功能
 - [x] 🆕 **員工管理頁面重新設計（5.3.1）**（2026-06-15）：`/employees` 大幅擴充。**清單**：搜尋（姓名/暱稱/Email）、篩選（在職狀態 / 所屬門市 / 合約類型）、排序（姓名 / 入職日）、釘選（localStorage 持久化，置頂「釘選」群組）、分組檢視（不分組 / 依門市 / 依身份組 / 在職狀態）、多選（UI 保留，批次操作待規劃）、快速新增員工對話框、啟用/停用切換（軟性，無刪除）。**詳情面板分頁**：個人資料 · 合約 · 可用時段（含門市偏好，依 `employee.availability.edit` / `employee.preference.edit` 權限可編輯/唯讀）· 班表歷史（彙整跨門市已發佈/封存班次，複用現有排班 API）· 權限（身份組賦予/移除）· 技能。**後端**：新增 `PATCH /users/{id}/activate`（含禁止停用自己）、`GET /organizations/{id}/users` 回應加入 `contract_type`（當前合約）+ `role_groups`（供清單篩選/分組）。前端 `_components/`：availability-tab、preferences-tab、permissions-tab、schedule-history-tab、add-employee-dialog。見 5.3.1
 - [x] 🆕 **個人資料擴充（IDEA-07）**（2026-06-11）：`User` 新增 `nickname`（NOT NULL，以 name 回填）/ `avatar_url` / `note`（僅管理者）/ `hire_date`；新增權限位 `employee.identity.view`，回應中 `name` 依檢視者權限回真實姓名或 nickname（本人/system.all/identity.view 可見真實姓名），`note` 僅 `org.employee.manage` 可見可改；payroll `user_name` 同樣分級。`/employees` 個人資料分頁改為可編輯（暱稱/電話/入職日期/頭像連結/備註 + 儲存）。含 Alembic migration `d4e5f6a7b8c9`（為既有管理身份組補授 identity.view）。見 3.1、ideas/IDEA-07.md
+- [x] 🆕 **員工註冊／入職流程（IDEA-12）**（2026-06-15）：邀請制。管理者建帳號不再設密碼，改建立待啟用帳號（`hashed_password` nullable、一次性 `invite_token` + 7 天效期）並產生邀請連結（A1 複製連結，尚未接 email）；員工經公開頁 `/onboard?token=…` 自設密碼 + 確認個資後啟用；`resend-invite` 重發權杖（重新邀請／密碼重設，為目前唯一的忘記密碼路徑）。含 Alembic migration `b3c4d5e6f7a8`、公開 `onboarding.py` router、`auth.login` 防 null 密碼、`/employees` 待啟用標籤 + 邀請連結鈕、新 `(auth)/onboard` 頁、middleware 公開白名單。見 5.3.5、3.1、ideas/idea-12-employee-registration-onboarding.md
 - [ ] 🆕 門市管理頁面（清單 + 管理介面 + 班表檢視，見 5.3.3，含 `Store.manager_user_id` / `Store.color`）
 - [ ] 🆕 個人班表依門市分色檢視頁面（見 5.3.2，可複用現有 iCal 機制）
 - [x] 🆕 **合約模型重新設計 v2**（已決策並完成實作，2026-06-08）：FT 改填月薪、PT 改填時薪、CUSTOM 不填薪資，移除起訖時間與工時上下限欄位；含 Alembic migration `8b2e4d6f1a90`、`/employees` 編輯器重做、`PayrollReport` 計算邏輯分流。已於瀏覽器端到端驗證

@@ -22,7 +22,7 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.availability import Availability, StorePreference
+from app.models.availability import Availability, AvailabilityTemplate, StorePreference
 from app.models.demand import DemandTemplate
 from app.models.role_group import RoleGroup, UserRoleGroup
 from app.models.skill import StoreSkillDemand, UserSkill
@@ -124,20 +124,22 @@ async def load_org_inputs(
     if not user_ids:
         return OrgScheduleInputs(store_ids, demand, [], {}, {}, {}, skill_demand)
 
-    # ── Availability (batch: specific week + default templates) ───────────────
+    # ── Availability (specific week, falling back to standing template) ───────
     avail_result = await db.execute(
         select(Availability).where(
             Availability.user_id.in_(user_ids),
-            (Availability.week_start == week_start) | Availability.is_default_template.is_(True),
+            Availability.week_start == week_start,
         )
     )
-    specific: dict[uuid.UUID, list[list[bool]]] = {}
-    template: dict[uuid.UUID, list[list[bool]]] = {}
-    for av in avail_result.scalars().all():
-        if av.week_start == week_start:
-            specific[av.user_id] = av.slots
-        elif av.is_default_template and av.user_id not in template:
-            template[av.user_id] = av.slots
+    specific: dict[uuid.UUID, list[list[bool]]] = {
+        av.user_id: av.slots for av in avail_result.scalars().all()
+    }
+    template_result = await db.execute(
+        select(AvailabilityTemplate).where(AvailabilityTemplate.user_id.in_(user_ids))
+    )
+    template: dict[uuid.UUID, list[list[bool]]] = {
+        t.user_id: t.slots for t in template_result.scalars().all()
+    }
     avail = {
         uid: specific.get(uid) or template.get(uid) or [[False] * 24 for _ in range(7)]
         for uid in user_ids
