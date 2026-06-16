@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { Suspense, useState, useEffect, useCallback } from "react";
 import { useSession } from "next-auth/react";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Save, RefreshCw, Copy, Loader2, Lock, Sparkles, CalendarClock } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -374,7 +375,24 @@ function StorePreferences() {
 const tabTriggerCls =
   "rounded-lg px-5 py-2 text-sm text-white/50 data-[state=active]:bg-purple-600/30 data-[state=active]:text-white data-[state=active]:shadow-none";
 
-export default function SchedulePage() {
+const TAB_VALUES = ["availability", "template", "preferences"];
+
+function SchedulePageInner() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  const tabParam = searchParams.get("tab");
+  const activeTab = tabParam && TAB_VALUES.includes(tabParam) ? tabParam : "availability";
+
+  const handleTabChange = (value: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (value === "availability") params.delete("tab");
+    else params.set("tab", value);
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -386,7 +404,7 @@ export default function SchedulePage() {
       </div>
 
       {/* Tabs */}
-      <Tabs defaultValue="availability">
+      <Tabs value={activeTab} onValueChange={(value) => handleTabChange(String(value))}>
         <TabsList className="h-auto gap-1 rounded-xl border border-white/10 bg-white/5 p-1">
           <TabsTrigger value="availability" className={tabTriggerCls}>
             可用時段
@@ -410,5 +428,13 @@ export default function SchedulePage() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+export default function SchedulePage() {
+  return (
+    <Suspense>
+      <SchedulePageInner />
+    </Suspense>
   );
 }

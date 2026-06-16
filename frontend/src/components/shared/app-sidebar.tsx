@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { signOut } from "next-auth/react";
 import {
   AlarmClock,
@@ -9,6 +9,7 @@ import {
   CalendarDays,
   CalendarRange,
   Clock,
+  Heart,
   LogOut,
   Receipt,
   ShieldCheck,
@@ -27,44 +28,70 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarSeparator,
 } from "@/components/ui/sidebar";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import type { Session } from "next-auth";
 
-type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }> };
+type NavMatchCtx = { pathname: string; tab: string | null };
+type NavItem = {
+  href: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  // 自訂 active 判斷（深層連結到分頁時用）；未提供則以 pathname === href 判斷
+  match?: (ctx: NavMatchCtx) => boolean;
+};
 
+// 個人（所有登入者）— 依使用頻率高→低：常看的班表置頂，低頻帳號設定置底
+// 「可用時段」與「門市偏好」實為 /availability 頁的兩個分頁，深層連結到對應 tab
 const personalNav: NavItem[] = [
-  { href: "/profile", label: "個人資料", icon: User },
-  { href: "/availability", label: "排班時段", icon: Clock },
-  { href: "/preferences", label: "門市偏好", icon: Store },
   { href: "/schedules", label: "我的班表", icon: CalendarDays },
+  {
+    href: "/availability",
+    label: "我的可用時段",
+    icon: Clock,
+    match: ({ pathname, tab }) => pathname === "/availability" && tab !== "preferences",
+  },
+  {
+    href: "/availability?tab=preferences",
+    label: "門市偏好",
+    icon: Heart,
+    match: ({ pathname, tab }) => pathname === "/availability" && tab === "preferences",
+  },
   { href: "/payroll", label: "薪資報表", icon: Receipt },
+  { href: "/profile", label: "個人資料", icon: User },
 ];
 
-const managerNav: NavItem[] = [
+// 排班管理 — 班表作業 + 其前置參數設定，收攏在同一組
+const scheduleManagerNav: NavItem[] = [
   { href: "/schedules", label: "班表管理", icon: CalendarRange },
-  { href: "/employees", label: "人員管理", icon: Users },
 ];
-
-const adminMgmtNav: NavItem[] = [
-  { href: "/settings/stores", label: "門市管理", icon: Store },
-  { href: "/settings/role-groups", label: "身份組與權限", icon: ShieldCheck },
-];
-
-const systemNav: NavItem[] = [
+const scheduleConfigNav: NavItem[] = [
   { href: "/settings/demand", label: "人力需求", icon: BarChart3 },
   { href: "/settings/deadline", label: "截止日設定", icon: AlarmClock },
 ];
 
+// 組織設定 — 人員 / 門市 / 權限治理
+const orgPeopleNav: NavItem[] = [
+  { href: "/employees", label: "人員管理", icon: Users },
+];
+const orgAdminNav: NavItem[] = [
+  { href: "/settings/stores", label: "門市管理", icon: Store },
+  { href: "/settings/role-groups", label: "身份組與權限", icon: ShieldCheck },
+];
+
 function NavGroup({ items, prefix }: { items: NavItem[]; prefix: string }) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const tab = searchParams.get("tab");
   return (
     <SidebarMenu>
-      {items.map(({ href, label, icon: Icon }) => (
+      {items.map(({ href, label, icon: Icon, match }) => (
         <SidebarMenuItem key={`${prefix}-${href}`}>
           <SidebarMenuButton
             render={<Link href={href} />}
-            isActive={pathname === href}
+            isActive={match ? match({ pathname, tab }) : pathname === href}
+            tooltip={label}
           >
             <Icon />
             <span>{label}</span>
@@ -80,9 +107,11 @@ type Props = {
 };
 
 export function AppSidebar({ user }: Props) {
+  // system.all is the super-admin wildcard — matches any permission query
+  // (mirrors the `has()` helper used on the pages themselves)
   const hasPermission = (perms: string[]) =>
     user.role_groups?.some((rg) =>
-      rg.permissions.some((p) => perms.includes(p))
+      rg.permissions.some((p) => p === "system.all" || perms.includes(p))
     ) ?? false;
 
   const showManager = hasPermission([
@@ -93,9 +122,20 @@ export function AppSidebar({ user }: Props) {
 
   const showAdmin = hasPermission(["org.manage", "system.all"]);
 
-  const mgmtNav: NavItem[] = [
-    ...(showManager ? managerNav : []),
-    ...(showAdmin ? adminMgmtNav : []),
+  // 人員管理：排班者、組織管理員、或專責人事（org.employee.manage）皆可見
+  const showPeople =
+    showManager || showAdmin || hasPermission(["org.employee.manage"]);
+
+  // 排班管理：管理者看班表作業，管理員另加排班參數設定
+  const scheduleNav: NavItem[] = [
+    ...(showManager ? scheduleManagerNav : []),
+    ...(showAdmin ? scheduleConfigNav : []),
+  ];
+
+  // 組織設定：人員管理（showPeople）、管理員另加門市/權限
+  const orgNav: NavItem[] = [
+    ...(showPeople ? orgPeopleNav : []),
+    ...(showAdmin ? orgAdminNav : []),
   ];
 
   const initials = (user.name ?? user.email ?? "?")
@@ -107,8 +147,13 @@ export function AppSidebar({ user }: Props) {
 
   return (
     <Sidebar>
-      <SidebarHeader className="px-4 py-3">
-        <span className="text-sm font-semibold">排班系統</span>
+      <SidebarHeader className="px-3 py-3">
+        <div className="flex items-center gap-2">
+          <div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <CalendarRange className="size-4" />
+          </div>
+          <span className="text-sm font-semibold">排班系統</span>
+        </div>
       </SidebarHeader>
 
       <SidebarContent>
@@ -119,24 +164,26 @@ export function AppSidebar({ user }: Props) {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {mgmtNav.length > 0 && (
+        {scheduleNav.length > 0 && (
           <SidebarGroup>
-            <SidebarGroupLabel>管理</SidebarGroupLabel>
+            <SidebarGroupLabel>排班管理</SidebarGroupLabel>
             <SidebarGroupContent>
-              <NavGroup items={mgmtNav} prefix="mgmt" />
+              <NavGroup items={scheduleNav} prefix="sched" />
             </SidebarGroupContent>
           </SidebarGroup>
         )}
 
-        {showAdmin && (
+        {orgNav.length > 0 && (
           <SidebarGroup>
-            <SidebarGroupLabel>系統設定</SidebarGroupLabel>
+            <SidebarGroupLabel>組織設定</SidebarGroupLabel>
             <SidebarGroupContent>
-              <NavGroup items={systemNav} prefix="sys" />
+              <NavGroup items={orgNav} prefix="org" />
             </SidebarGroupContent>
           </SidebarGroup>
         )}
       </SidebarContent>
+
+      <SidebarSeparator />
 
       <SidebarFooter className="px-3 py-3">
         <div className="flex items-center gap-3">

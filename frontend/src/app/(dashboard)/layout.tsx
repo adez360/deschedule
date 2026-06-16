@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import {
@@ -21,7 +22,9 @@ export default async function DashboardLayout({
   return (
     <SidebarProvider>
       <SessionGuard />
-      <AppSidebar user={session.user} />
+      <Suspense>
+        <AppSidebar user={session.user} />
+      </Suspense>
       <SidebarInset>
         <header className="flex h-12 items-center gap-2 border-b px-4" style={{ background: "var(--background)" }}>
           <SidebarTrigger className="-ml-1" />
