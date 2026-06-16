@@ -31,6 +31,11 @@ class Store(Base):
     # IDEA-10 G1: stores sharing the same non-null label can cross-schedule;
     # NULL = this store does not participate in cross-store scheduling.
     cross_group: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 5.3.3 store management: store manager + representative colour (hex, e.g. "#7C3AED")
+    manager_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    color: Mapped[str | None] = mapped_column(String(9), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     organization: Mapped[Organization] = relationship("Organization", back_populates="stores")

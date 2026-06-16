@@ -7,6 +7,8 @@ export interface StoreBody {
   name: string;
   timezone: string;
   cross_group?: string | null;
+  manager_user_id?: string | null;
+  color?: string | null;
 }
 
 export const createStore = (orgId: string, body: StoreBody, token: string) =>

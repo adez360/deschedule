@@ -38,8 +38,9 @@ async def update_store(
     await assert_org_access(current_user, store.organization_id, db)
     await assert_permission(current_user, "org.manage", db)
     # exclude_unset (not exclude_none) so nullable fields can be explicitly cleared
+    nullable_fields = ("address", "cross_group", "manager_user_id", "color")
     for field, value in body.model_dump(exclude_unset=True).items():
-        if value is None and field not in ("address", "cross_group"):
+        if value is None and field not in nullable_fields:
             continue  # name/timezone are NOT NULL
         setattr(store, field, value)
     await db.commit()

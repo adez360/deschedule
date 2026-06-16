@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Building2, Plus, Search, Pencil, Trash2, Loader2, Globe,
+  Building2, Plus, Search, Pencil, Trash2, Loader2, Globe, UserRound, Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -14,7 +14,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { fetchStores } from "@/lib/schedules-api";
+import { fetchStores, fetchOrgUsers, type UserDTO } from "@/lib/schedules-api";
 import {
   createStore, updateStore, deleteStore,
   type StoreDTO, type StoreBody,
@@ -27,31 +27,60 @@ const TIMEZONES = [
   "Asia/Hong_Kong", "Asia/Singapore", "Asia/Seoul", "UTC",
 ];
 
-const DEFAULT_FORM: StoreBody = { name: "", timezone: "Asia/Taipei", cross_group: "" };
+// 門市代表色 — on-brand, mutually distinct, good contrast on dark surfaces
+const STORE_COLORS = [
+  "#7C3AED", "#2563EB", "#0891B2", "#059669",
+  "#CA8A04", "#EA580C", "#DC2626", "#DB2777",
+];
+
+const DEFAULT_COLOR = "#7C3AED";
+
+const DEFAULT_FORM: StoreBody = {
+  name: "", timezone: "Asia/Taipei", cross_group: "",
+  manager_user_id: null, color: DEFAULT_COLOR,
+};
+
+// display name helper (prefers nickname-free real name from list endpoint)
+const userLabel = (u: UserDTO) => u.name || u.nickname || u.email;
 
 // ─── Store Dialog (add + edit) ───────────────────────────────────────────────
 
 function StoreDialog({
-  open, onClose, initial, orgId, token,
+  open, onClose, initial, orgId, token, users,
 }: {
   open: boolean;
   onClose: () => void;
   initial: StoreDTO | null;
   orgId: string;
   token: string;
+  users: UserDTO[];
 }) {
   const qc = useQueryClient();
   const [form, setForm] = useState<StoreBody>(DEFAULT_FORM);
 
   useEffect(() => {
     if (open) setForm(initial
-      ? { name: initial.name, timezone: initial.timezone, cross_group: initial.cross_group ?? "" }
+      ? {
+          name: initial.name, timezone: initial.timezone,
+          cross_group: initial.cross_group ?? "",
+          manager_user_id: initial.manager_user_id ?? null,
+          color: initial.color ?? DEFAULT_COLOR,
+        }
       : DEFAULT_FORM);
   }, [open, initial]);
 
+  const managerName = form.manager_user_id
+    ? users.find((u) => u.id === form.manager_user_id)
+    : null;
+
   const saveMut = useMutation({
     mutationFn: () => {
-      const body = { ...form, cross_group: form.cross_group?.trim() || null };
+      const body = {
+        ...form,
+        cross_group: form.cross_group?.trim() || null,
+        manager_user_id: form.manager_user_id || null,
+        color: form.color || null,
+      };
       return initial ? updateStore(initial.id, body, token) : createStore(orgId, body, token);
     },
     onSuccess: () => {
@@ -110,6 +139,53 @@ function StoreDialog({
             />
             <p className="text-[11px] text-white/25">同群組的門市可互相跨店排班；未設群組的門市只排自己的員工</p>
           </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs text-white/40">門市負責人</label>
+            <Select
+              value={form.manager_user_id ?? "__none__"}
+              onValueChange={(v) =>
+                setForm((p) => ({ ...p, manager_user_id: v === "__none__" ? null : v }))
+              }
+            >
+              <SelectTrigger className="h-10 w-full border-white/10 bg-white/5 text-sm text-white">
+                <span className={cn(!managerName && "text-white/30")}>
+                  {managerName ? userLabel(managerName) : "未指定"}
+                </span>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">未指定</SelectItem>
+                {users.map((u) => (
+                  <SelectItem key={u.id} value={u.id}>{userLabel(u)}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-xs text-white/40">門市代表色</label>
+            <div className="flex flex-wrap items-center gap-2">
+              {STORE_COLORS.map((c) => {
+                const active = form.color === c;
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setForm((p) => ({ ...p, color: c }))}
+                    aria-label={`選擇代表色 ${c}`}
+                    aria-pressed={active}
+                    className={cn(
+                      "size-8 rounded-lg flex items-center justify-center transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40",
+                      active && "ring-2 ring-white/70 ring-offset-2 ring-offset-[#1a1a2e]",
+                    )}
+                    style={{ background: c }}
+                  >
+                    {active && <Check className="size-4 text-white" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
         <DialogFooter>
@@ -154,6 +230,17 @@ export default function StoresPage() {
     queryFn:  () => fetchStores(orgId, token),
     enabled:  !!orgId && !!token,
   });
+
+  const { data: users = [] } = useQuery({
+    queryKey: ["org-users", orgId],
+    queryFn:  () => fetchOrgUsers(orgId, token),
+    enabled:  !!orgId && !!token,
+  });
+
+  const userMap = useMemo(
+    () => new Map(users.map((u) => [u.id, u])),
+    [users],
+  );
 
   const filteredStores = useMemo(() => {
     if (!search.trim()) return stores;
@@ -231,16 +318,22 @@ export default function StoresPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredStores.map((store) => (
+          {filteredStores.map((store) => {
+            const accent = store.color || DEFAULT_COLOR;
+            const manager = store.manager_user_id ? userMap.get(store.manager_user_id) : null;
+            return (
             <div
               key={store.id}
-              className="rounded-2xl border border-white/10 p-5 flex flex-col gap-3 transition-colors hover:border-white/[0.18]"
+              className="relative overflow-hidden rounded-2xl border border-white/10 p-5 flex flex-col gap-3 transition-colors hover:border-white/[0.18]"
               style={{ background: "rgba(255,255,255,0.03)", backdropFilter: "blur(12px)" }}
             >
+              {/* colour accent bar */}
+              <span aria-hidden className="absolute inset-x-0 top-0 h-1" style={{ background: accent }} />
+
               <div className="flex items-center gap-3 min-w-0">
                 <div className="size-10 rounded-xl flex-shrink-0 flex items-center justify-center"
-                  style={{ background: "rgba(124,58,237,0.18)" }}>
-                  <Building2 className="size-5 text-purple-400" />
+                  style={{ background: `${accent}2e` }}>
+                  <Building2 className="size-5" style={{ color: accent }} />
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-white truncate">{store.name}</p>
@@ -250,10 +343,20 @@ export default function StoresPage() {
                   </div>
                 </div>
                 {store.cross_group && (
-                  <span className="flex-shrink-0 rounded-full px-2 py-0.5 text-[11px] text-purple-300"
-                    style={{ background: "rgba(124,58,237,0.18)" }}>
+                  <span className="flex-shrink-0 rounded-full px-2 py-0.5 text-[11px]"
+                    style={{ background: `${accent}2e`, color: accent }}>
                     {store.cross_group}
                   </span>
+                )}
+              </div>
+
+              {/* manager row */}
+              <div className="flex items-center gap-1.5 text-[11px] text-white/35 min-w-0">
+                <UserRound className="size-3 flex-shrink-0" />
+                {manager ? (
+                  <span className="truncate text-white/55">{userLabel(manager)}</span>
+                ) : (
+                  <span className="text-white/25">未指定負責人</span>
                 )}
               </div>
 
@@ -272,7 +375,8 @@ export default function StoresPage() {
                 </button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -283,6 +387,7 @@ export default function StoresPage() {
         initial={editingStore}
         orgId={orgId}
         token={token}
+        users={users}
       />
 
       {/* Delete confirmation dialog */}

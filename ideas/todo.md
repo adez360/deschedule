@@ -1,8 +1,32 @@
 # TODO（2026-06-15 盤點）
 
-## 🟡 已實作、尚未 commit（2026-06-15）
+## 🟡 待 commit（2026-06-16）
 
-- **IDEA-11 標準班表 + 每週自動提交可用時段**（決策 A2+B2+C1+D3+E1+F+G2，見 `ideas/IDEA-11.md`）：
+- **門市管理頁面擴充（PLAN §5.3.3 item 2）**：`/settings/stores` 清單 + CRUD 原已實作；本次新增
+  `Store.manager_user_id`（門市負責人，FK users `ON DELETE SET NULL`）+ `Store.color`（門市代表色 hex）。
+  - 後端：`models/store.py` + `schemas/store.py`（Create/Update/Response 三者）+ `stores.py` PATCH 兩欄可清空；
+    migration `c5d6e7f8a9b0`（**新 head**，已套用至 dev DB）
+  - 前端：`schedules-api.ts` StoreDTO + `stores-api.ts` StoreBody 加兩欄；dialog 加負責人下拉（`fetchOrgUsers`）+
+    8 色代表色選擇器；卡片顯示色彩 accent（頂部色條 + icon 底色）+ 負責人姓名
+  - 驗證：✅ FE typecheck 乾淨、後端 schema/import 載入、migration head、ORM round-trip（寫入 FK+color → 還原）通過
+  - 待辦：瀏覽器實測（新增/編輯設定負責人+代表色、清單顯示）；**門市班表檢視（item 3）尚未做** —— 下一步候選
+
+- **IDEA-13 左側導覽列重整**（決策 A1+B1+C1+D優化，見 `ideas/idea-13-sidebar-nav-redesign.md`）：
+  `app-sidebar.tsx` 改三組 `個人 / 排班管理 / 組織設定`；`排班時段`→`我的可用時段`、`門市偏好`圖示改 `Heart`；
+  Header 品牌圖示 + footer `SidebarSeparator` + 各項 `tooltip`。純前端、無 API/DB 變動。
+  - `門市偏好` 實為 `/availability` 分頁（非獨立頁）：改深層連結 `?tab=preferences`，`/availability` Tabs 改 URL 驅動
+    （`router.replace`），側欄 active 讀 `?tab` 區分；`useSearchParams` 用 `<Suspense>` 包住（layout 的 sidebar + 頁面）。
+    移除空的 `/preferences` stub 目錄。
+  - **人員管理權限修正**：原只在 `showManager`（排班權限）下顯示，導致純組織管理員看不到。新增 `showPeople`
+    （排班者 / `org.manage` / `system.all` / `org.employee.manage` 皆可見）。
+  - 待辦：瀏覽器實測（三種權限層級 — 一般員工 / 排班管理者 / 組織管理員 — 的分組可見性；點「門市偏好」直達分頁）
+  - 已同步更新 `PLAN.md` §10 Phase 2（並補登 IDEA-10、IDEA-11 進路線圖）
+
+## 🟢 已 commit（`dd347ef`，2026-06-15）
+
+> IDEA-11 與 IDEA-12 因 `user.py` / `models/__init__.py` 改動交錯，合併為單一 commit `dd347ef`。
+
+- **IDEA-11 標準班表 + 每週自動提交可用時段**（決策 A2+B2+C1+D3+E1+F+G2，見 `ideas/idea-11-default-schedule-auto-submit-availability.md`）：
   - `AvailabilityTemplate` 獨立表（每人一筆）；`Availability` 移除 `is_default_template`、新增 `auto_filled`
   - migration `a1b2c3d4e5f6`（**新 head**，已套用至 dev DB）：建表 + 欄位調整 + 搬移舊 default-template 列
   - API：`GET/PUT /users/me/availability-template` + 管理者 `/users/{id}/availability-template`
@@ -18,7 +42,7 @@
   - migration `b3c4d5e6f7a8`（**新 head**，已套用至 dev DB）
   - API：`POST /organizations/{org}/users` 改不收密碼、回傳 `InviteResponse`；`POST .../users/{id}/resend-invite`（重發／密碼重設）；公開 `GET/POST /onboard/{token}`；`auth.login` 防 null 密碼
   - 前端：`add-employee-dialog` 移密碼欄 + 複製邀請連結步驟；`/employees` 待啟用 badge + 邀請連結鈕；新 `(auth)/onboard` 公開頁；`middleware.ts` 白名單
-  - 驗證：端到端 curl 測過（建立→取資訊→設密碼→登入→token 重用 404；pending 登入 401；resend 密碼重設→登入）
+  - 驗證：✅ curl + 瀏覽器端到端測過（新增→複製連結→`/onboard` 預填+設密碼→啟用 204→待啟用 badge 消失→後端登入 200；token 重用 404；pending 登入 401；resend 密碼重設）。註：`/onboard`、`/login` 密碼欄會觸發本機密碼管理器擴充注入 iframe，擋住 CDP 截圖/點擊，故「送出按鈕點擊」與 NextAuth UI 登入改以 API 驗證資料流（環境限制，非程式問題）
   - 後續：A2 email 自動寄送（待通知系統）、入職後可選引導去設標準週表
 
 ## ✅ 已完成並 commit
@@ -35,9 +59,9 @@
 ## 🔶 待處理
 
 - [ ] 端到端驗證（多門市自動排班 + 跨店群組 + daily cap 上限）— 尚未在瀏覽器實測
-- [ ] commit IDEA-11 + IDEA-12 變更
+- [x] commit IDEA-11 + IDEA-12 變更（`dd347ef`）
 - [ ] IDEA-11 瀏覽器實測（標準週表分頁、auto_filled 標記、週五排程實際觸發）
-- [ ] IDEA-12 瀏覽器實測（新增員工複製連結、`/onboard` 設密碼啟用、待啟用 badge、重設密碼）
+- [x] IDEA-12 瀏覽器實測（2026-06-15，見上；環境限制下送出/登入改以 API 驗證）
 
 ---
 

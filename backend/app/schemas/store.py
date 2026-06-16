@@ -9,6 +9,8 @@ class StoreCreate(BaseModel):
     address: str | None = Field(default=None, max_length=500)
     timezone: str = Field(default="Asia/Taipei", max_length=64)
     cross_group: str | None = Field(default=None, max_length=64)
+    manager_user_id: uuid.UUID | None = Field(default=None)
+    color: str | None = Field(default=None, max_length=9)
 
 
 class StoreUpdate(BaseModel):
@@ -16,6 +18,8 @@ class StoreUpdate(BaseModel):
     address: str | None = Field(default=None, max_length=500)
     timezone: str | None = Field(default=None, max_length=64)
     cross_group: str | None = Field(default=None, max_length=64)
+    manager_user_id: uuid.UUID | None = Field(default=None)
+    color: str | None = Field(default=None, max_length=9)
 
 
 class StoreResponse(BaseModel):
@@ -27,4 +31,6 @@ class StoreResponse(BaseModel):
     address: str | None
     timezone: str
     cross_group: str | None
+    manager_user_id: uuid.UUID | None
+    color: str | None
     created_at: datetime

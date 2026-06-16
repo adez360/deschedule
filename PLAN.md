@@ -636,7 +636,7 @@ score(assignment) = preference_weight(employee, store) × availability(employee,
    - 門市總覽表（依員工列出當週各時段班次，類似現行 `/schedules` 員工 Grid，但以門市為中心彙總跨身份組員工）
    - 門市排班需求熱力圖（在現行覆蓋率熱力圖基礎上疊加能力需求標記）
 
-> 現行 `/settings/stores` 僅為佔位頁面（後端 CRUD 已完成，前端未實作）。此提案實質是將「門市管理」從 Phase 1 範圍外的佔位頁面，擴充為完整管理介面 + 班表檢視，建議列入 **Phase 2**。
+> **進度（2026-06-16）**：清單 + CRUD 已實作；管理介面已擴充門市負責人（`Store.manager_user_id`）與門市代表色（`Store.color`，migration `c5d6e7f8a9b0`）。**尚待實作**：item 3 門市班表檢視（門市總覽 Grid + 能力需求疊加熱力圖）。
 
 #### 5.3.4 AI 輔助審查（低優先度）
 
@@ -882,12 +882,14 @@ PATCH  /api/schedules/:scheduleId/assignments/:id  # 手動拖曳覆蓋
 - [x] 工時統計與薪資報表（含 CSV 匯出）—— 已完成並通過瀏覽器端到端驗證（2026-06-09）：FT 顯示月薪制、PT 計算時薪×工時、CUSTOM 顯示工時不顯示薪資；含 Alembic migration `b2c3d4e5f6a7`（`gross_pay` nullable）、`payroll` service 層、`/payroll.py` 三支 API（GET org/store、POST generate）、`/payroll` 前端頁面（門市選擇器、月份導覽、分組表格、小計列、CSV 匯出）、sidebar 加入 Receipt 圖示與 `showPayroll` 權限判斷
 - [x] 🆕 **薪資報表 IDEA-06 改版** —— 已完成並通過瀏覽器端到端驗證（2026-06-11）：`/payroll` 重構為「個人 / 門市」雙視圖（權限分流）、新增「其他項目」加減項（`PayrollAdjustment` 表 + CRUD API + 行內編輯）、FT 所屬門市歸屬（`User.home_store_id`，FT 月薪只計入所屬門市）、員工自助檢視（`GET /users/me/payroll`，側邊欄移至「個人」群組對所有人顯示）。含 Alembic migration `c3d4e5f6a7b8`、`/employees` 個人資料分頁所屬門市下拉、`users-api.ts`。詳見 5.1.5、3.1、3.12、IDEA-06
 - [ ] 班表 PDF 匯出
-- [ ] Email 通知系統（含截止提醒）
-- [ ] 預設時段模板（`is_default_template`）功能
+- [ ] Email 通知系統（含截止提醒）— IDEA-11 的「未設定標準模板」名單通知併入此項
+- [x] 🆕 **標準週表 + 每週自動提交可用時段（IDEA-11）**（2026-06-15）：取代原「預設時段模板」構想。新增獨立 `AvailabilityTemplate` 表（每人一筆固定週表），`Availability` 移除 `is_default_template`、新增 `auto_filled`。Celery beat（`celery-beat` 服務，週五 23:00 Asia/Taipei）每週把標準週表帶入下一週、不覆蓋已存在資料；`scheduler.py` fallback 改讀模板。API `GET/PUT /users/me/availability-template`（+ 管理者版）。前端 `/availability` 新增「標準週表」分頁 + 週檢視 `auto_filled` 標記。含 Alembic migration `a1b2c3d4e5f6`。後續：未設定名單通知（待 Email）、管理者模板編輯 UI（API 已備、UI 待接）。見 ideas/idea-11-default-schedule-auto-submit-availability.md
+- [x] 🆕 **全組織聯合排班（IDEA-10）**（2026-06-12）：`POST /organizations/{org_id}/schedules/generate` 一次填滿所有門市（`scheduler.run_greedy_org`），含跨門市互斥 + 全域每日工時上限；已發佈/封存班表與手動草稿視為固定佔用不更動。跨店範圍由 `Store.cross_group` 標籤界定（有 `home_store_id` 者只能排自家店 + 同群門市；無所屬門市者依身份組覆蓋浮動）。另含 `User.daily_hour_max`（每員工每日跨門市工時上限，NULL=8h）。含 Alembic migration `f7a8b9c0d1e2`（cross_group）、`e5f6a7b8c9d0`（daily_hour_max）+ `/settings/stores`、`/availability` 偏好分頁 UI。見 ideas/idea-10-auto-scheduling-logic.md
+- [x] 🆕 **左側導覽列重整（IDEA-13）**（2026-06-16）：`app-sidebar.tsx` 改三組 `個人 / 排班管理 / 組織設定`（消滅原語意模糊的「系統設定」桶，把排班參數收攏到排班作業旁）；個人組依使用頻率重排（我的班表置頂、個人資料置底）；`排班時段`→`我的可用時段`、`門市偏好` 圖示改 `Heart`（消除與「門市管理」的 Store 圖示碰撞）；Header 品牌圖示 + footer `SidebarSeparator` + 各項 `tooltip`。`門市偏好` 深層連結 `/availability?tab=preferences`（該頁 Tabs 改 URL 驅動），側欄 active 讀 `?tab` 區分。修正人員管理權限門檻：新增 `showPeople`（排班者 / `org.manage` / `system.all` / `org.employee.manage` 皆可見），解決組織管理員看不到「人員管理」的問題。純前端、無 API/DB 變動。見 ideas/idea-13-sidebar-nav-redesign.md
 - [x] 🆕 **員工管理頁面重新設計（5.3.1）**（2026-06-15）：`/employees` 大幅擴充。**清單**：搜尋（姓名/暱稱/Email）、篩選（在職狀態 / 所屬門市 / 合約類型）、排序（姓名 / 入職日）、釘選（localStorage 持久化，置頂「釘選」群組）、分組檢視（不分組 / 依門市 / 依身份組 / 在職狀態）、多選（UI 保留，批次操作待規劃）、快速新增員工對話框、啟用/停用切換（軟性，無刪除）。**詳情面板分頁**：個人資料 · 合約 · 可用時段（含門市偏好，依 `employee.availability.edit` / `employee.preference.edit` 權限可編輯/唯讀）· 班表歷史（彙整跨門市已發佈/封存班次，複用現有排班 API）· 權限（身份組賦予/移除）· 技能。**後端**：新增 `PATCH /users/{id}/activate`（含禁止停用自己）、`GET /organizations/{id}/users` 回應加入 `contract_type`（當前合約）+ `role_groups`（供清單篩選/分組）。前端 `_components/`：availability-tab、preferences-tab、permissions-tab、schedule-history-tab、add-employee-dialog。見 5.3.1
 - [x] 🆕 **個人資料擴充（IDEA-07）**（2026-06-11）：`User` 新增 `nickname`（NOT NULL，以 name 回填）/ `avatar_url` / `note`（僅管理者）/ `hire_date`；新增權限位 `employee.identity.view`，回應中 `name` 依檢視者權限回真實姓名或 nickname（本人/system.all/identity.view 可見真實姓名），`note` 僅 `org.employee.manage` 可見可改；payroll `user_name` 同樣分級。`/employees` 個人資料分頁改為可編輯（暱稱/電話/入職日期/頭像連結/備註 + 儲存）。含 Alembic migration `d4e5f6a7b8c9`（為既有管理身份組補授 identity.view）。見 3.1、ideas/IDEA-07.md
 - [x] 🆕 **員工註冊／入職流程（IDEA-12）**（2026-06-15）：邀請制。管理者建帳號不再設密碼，改建立待啟用帳號（`hashed_password` nullable、一次性 `invite_token` + 7 天效期）並產生邀請連結（A1 複製連結，尚未接 email）；員工經公開頁 `/onboard?token=…` 自設密碼 + 確認個資後啟用；`resend-invite` 重發權杖（重新邀請／密碼重設，為目前唯一的忘記密碼路徑）。含 Alembic migration `b3c4d5e6f7a8`、公開 `onboarding.py` router、`auth.login` 防 null 密碼、`/employees` 待啟用標籤 + 邀請連結鈕、新 `(auth)/onboard` 頁、middleware 公開白名單。見 5.3.5、3.1、ideas/idea-12-employee-registration-onboarding.md
-- [ ] 🆕 門市管理頁面（清單 + 管理介面 + 班表檢視，見 5.3.3，含 `Store.manager_user_id` / `Store.color`）
+- [~] 🆕 **門市管理頁面（5.3.3）**：清單 + CRUD 已完成（卡片清單、搜尋、新增/編輯/刪除 dialog）。**管理介面擴充（2026-06-16）**：新增 `Store.manager_user_id`（門市負責人，FK users，`ON DELETE SET NULL`）+ `Store.color`（門市代表色，hex）。含 Alembic migration `c5d6e7f8a9b0`、`schemas/store.py` + `stores.py` PATCH（兩欄可清空）、`/settings/stores` dialog 加負責人下拉 + 8 色代表色選擇器、卡片顯示色彩 accent + 負責人。**待辦：門市班表檢視（5.3.3 item 3，門市總覽 Grid + 能力需求疊加熱力圖）尚未實作**
 - [ ] 🆕 個人班表依門市分色檢視頁面（見 5.3.2，可複用現有 iCal 機制）
 - [x] 🆕 **合約模型重新設計 v2**（已決策並完成實作，2026-06-08）：FT 改填月薪、PT 改填時薪、CUSTOM 不填薪資，移除起訖時間與工時上下限欄位；含 Alembic migration `8b2e4d6f1a90`、`/employees` 編輯器重做、`PayrollReport` 計算邏輯分流。已於瀏覽器端到端驗證
 - [x] 🆕 **合約改為跨門市 org-level（v3）**（已決策並完成實作，2026-06-09）：移除 `store_id`，每位員工在組織層級只有一份有效合約；含 Alembic migration `e1f2a3b4c5d6`、model/schema/router 更新（`GET/PUT /users/{userId}/contract`）、前端 `contracts-api.ts` 改為跨門市端點、`/employees` 移除門市選擇器

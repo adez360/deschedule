@@ -1,6 +1,9 @@
 import { apiFetch } from "@/lib/api-client";
 
-export interface StoreDTO { id: string; name: string; timezone: string; cross_group?: string | null }
+export interface StoreDTO {
+  id: string; name: string; timezone: string; cross_group?: string | null;
+  manager_user_id?: string | null; color?: string | null;
+}
 export interface UserDTO  {
   id: string; name: string; nickname?: string; email: string;
   phone?: string | null; avatar_url?: string | null; note?: string | null;
