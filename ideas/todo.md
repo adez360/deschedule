@@ -3,10 +3,10 @@
 ## 🟢 已 commit（2026-06-16）
 
 > `773e0d2` 側邊欄重整（IDEA-13）、`d3f823e` 門市負責人 + 代表色（5.3.3）。
-> 註：瀏覽器實測時 dev session 出現全站 NextAuth `ClientFetchError`（client session 無 access_token →
-> 所有 token-gated 查詢被停用，/employees 與 /settings/stores 皆顯示空清單，與 IDEA-12 記錄的環境限制同類），
-> 故「設定負責人/代表色 → 清單顯示」的即時資料往返未能在瀏覽器驗證；改以後端 API/ORM round-trip 驗證資料層。
-> UI 渲染（側邊欄三組、門市 dialog 負責人下拉 + 代表色選擇器）已在瀏覽器確認。
+> **瀏覽器實測（localhost:3000，✅ 全數通過）**：側邊欄三組顯示正確、`system.all` 超管可見全部項目；
+> 門市卡片色彩 accent + 負責人列正常；編輯門市 → 設定負責人（吳雅婷）+ 改代表色（紅）→ 儲存 → 重整後持久化正確。
+> 註：務必用 **`localhost:3000`**（前端直連）而非 nginx `localhost:80` —— 後者會讓 NextAuth client session 抓不到
+> access_token（`ClientFetchError`），全站資料載不進來。實測完已將 門市A 還原（manager=None, color=#2563EB）。
 
 - **門市管理頁面擴充（PLAN §5.3.3 item 2）**：`/settings/stores` 清單 + CRUD 原已實作；本次新增
   `Store.manager_user_id`（門市負責人，FK users `ON DELETE SET NULL`）+ `Store.color`（門市代表色 hex）。
