@@ -29,3 +29,7 @@ Thumbs.db
 
 # Claude Code local state
 .claude/
+CLAUDE.md
+
+# Reference images (local only)
+reference-img/
