@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -54,7 +54,6 @@ class StoreSkillDemandResponse(BaseModel):
 
     id: uuid.UUID
     store_id: uuid.UUID
-    week_start: date
     skill_id: uuid.UUID
     slots: list[list[bool]]
     updated_at: datetime

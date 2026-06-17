@@ -64,12 +64,9 @@ async def load_org_inputs(
 
     empty_demand = lambda: [[0] * 24 for _ in range(7)]  # noqa: E731
 
-    # ── Demand (headcount) per store ──────────────────────────────────────────
+    # ── Demand (headcount) per store ─ standing, one row per store (IDEA-15) ────
     demand_result = await db.execute(
-        select(DemandTemplate).where(
-            DemandTemplate.store_id.in_(store_ids),
-            DemandTemplate.week_start == week_start,
-        )
+        select(DemandTemplate).where(DemandTemplate.store_id.in_(store_ids))
     )
     demand: dict[uuid.UUID, list[list[int]]] = {sid: empty_demand() for sid in store_ids}
     for d in demand_result.scalars().all():
@@ -110,12 +107,9 @@ async def load_org_inputs(
 
     daily_caps = {uid: users[uid].daily_hour_max or DAILY_HOUR_MAX for uid in user_ids}
 
-    # ── Skill sub-demand per store ─────────────────────────────────────────────
+    # ── Skill sub-demand per store ─ standing, one row per (store, skill) ──────
     skill_demand_result = await db.execute(
-        select(StoreSkillDemand).where(
-            StoreSkillDemand.store_id.in_(store_ids),
-            StoreSkillDemand.week_start == week_start,
-        )
+        select(StoreSkillDemand).where(StoreSkillDemand.store_id.in_(store_ids))
     )
     skill_demand: dict[uuid.UUID, dict[uuid.UUID, list[list[bool]]]] = {}
     for sd in skill_demand_result.scalars().all():

@@ -3,14 +3,14 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, Copy, Trash2, ChevronLeft, ChevronRight, ChevronDown, Loader2, Maximize2, Minimize2, PanelTop, PanelLeft, PanelRight } from "lucide-react";
+import { Save, Trash2, ChevronDown, Loader2, Maximize2, Minimize2, PanelTop, PanelLeft, PanelRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { fetchStores } from "@/lib/schedules-api";
-import { fetchDemand, saveDemand, copyDemandFromWeek, emptySlots } from "@/lib/demand-api";
+import { fetchDemand, saveDemand, emptySlots } from "@/lib/demand-api";
 import { fetchSkills, fetchSkillDemand, setSkillDemand, type SkillDTO } from "@/lib/skills-api";
 import { DAYS, DISPLAY_HOURS } from "@/lib/constants";
 
@@ -45,18 +45,7 @@ const PRESETS = [
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-function getMondayOfWeek(d: Date): Date {
-  const r = new Date(d);
-  const dow = r.getDay();
-  r.setDate(r.getDate() - (dow === 0 ? 6 : dow - 1));
-  r.setHours(0, 0, 0, 0);
-  return r;
-}
-function toLocalDateStr(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
 function pad2(n: number) { return String(n).padStart(2, "0"); }
-function fmtDate(d: Date) { return `${d.getMonth() + 1}/${d.getDate()}`; }
 
 // ─── DemandGrid ─────────────────────────────────────────────────────────────
 
@@ -141,10 +130,9 @@ function BrushPalette({ selection, onApplyCount, skills, skillSlots, onToggleSki
   );
 }
 
-function DemandGrid({ slots, onChange, weekDates, loading, skills, skillSlots, onSkillChange }: {
+function DemandGrid({ slots, onChange, loading, skills, skillSlots, onSkillChange }: {
   slots: number[][];
   onChange: (s: number[][]) => void;
-  weekDates: Date[];
   loading: boolean;
   skills?: SkillDTO[];
   skillSlots?: Map<string, boolean[][]>;
@@ -253,7 +241,7 @@ function DemandGrid({ slots, onChange, weekDates, loading, skills, skillSlots, o
   return (
     <div className="space-y-2">
       <div className="flex justify-end">
-        <span className="text-xs text-white/30">本週總需求人次：<span className="text-purple-400 font-medium">{totalDemand}</span></span>
+        <span className="text-xs text-white/30">每週總需求人次：<span className="text-purple-400 font-medium">{totalDemand}</span></span>
       </div>
 
       <div
@@ -378,10 +366,9 @@ function DemandGrid({ slots, onChange, weekDates, loading, skills, skillSlots, o
                   ? <><Minimize2 className="size-3" /><span className="text-[9px] leading-none">縮小</span></>
                   : <><Maximize2 className="size-3" /><span className="text-[9px] leading-none">全螢</span></>}
               </button>
-              {DAYS.map((d, i) => (
+              {DAYS.map((d) => (
                 <div key={d} className="py-3 text-center border-r border-white/[0.06] last:border-r-0">
                   <div className="text-xs font-medium text-white/70">{d}</div>
-                  <div className="text-[10px] text-white/30">{fmtDate(weekDates[i])}</div>
                 </div>
               ))}
               <div />{/* right scroll zone */}
@@ -600,20 +587,11 @@ export default function DemandPage() {
   const orgId = session?.user?.organization_id ?? "";
 
   const [selectedStoreId, setSelectedStoreId] = useState("");
-  const [weekStart, setWeekStart] = useState(() => getMondayOfWeek(new Date()));
   const [localSlots, setLocalSlots] = useState<number[][]>(emptySlots);
   const [isDirty, setIsDirty] = useState(false);
   const [skillLocalMap, setSkillLocalMap] = useState<Map<string, boolean[][]>>(new Map());
   const [dirtySkillIds, setDirtySkillIds] = useState<Set<string>>(new Set());
   const qc = useQueryClient();
-
-  const weekStartStr = toLocalDateStr(weekStart);
-  const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(weekStart); d.setDate(weekStart.getDate() + i); return d;
-  }), [weekStart]);
-  const weekLabel = `${fmtDate(weekDates[0])} – ${fmtDate(weekDates[6])}`;
-  const prevWeekStr = toLocalDateStr(new Date(weekStart.getTime() - 7 * 86400000));
-  const shiftWeek = (delta: number) => setWeekStart((p) => { const d = new Date(p); d.setDate(d.getDate() + delta * 7); return d; });
 
   const { data: stores = [] } = useQuery({
     queryKey: ["stores", orgId], queryFn: () => fetchStores(orgId, token), enabled: !!orgId && !!token,
@@ -622,8 +600,8 @@ export default function DemandPage() {
   const storeId = selectedStoreId || stores[0]?.id || "";
 
   const { data: demand, isLoading } = useQuery({
-    queryKey: ["demand", storeId, weekStartStr],
-    queryFn: () => fetchDemand(storeId, weekStartStr, token),
+    queryKey: ["demand", storeId],
+    queryFn: () => fetchDemand(storeId, token),
     enabled: !!storeId && !!token,
     retry: (count, err: Error & { status?: number }) => err.status !== 404 && count < 2,
   });
@@ -631,7 +609,7 @@ export default function DemandPage() {
   useEffect(() => {
     if (demand) { setLocalSlots(demand.slots.map((r) => [...r])); setIsDirty(false); }
     else if (!isLoading) { setLocalSlots(emptySlots()); setIsDirty(false); }
-  }, [demand, isLoading, storeId, weekStartStr]);
+  }, [demand, isLoading, storeId]);
 
   const handleChange = useCallback((next: number[][]) => { setLocalSlots(next); setIsDirty(true); }, []);
 
@@ -648,12 +626,6 @@ export default function DemandPage() {
     setIsDirty(true);
   }, []);
 
-  const copyMut = useMutation({
-    mutationFn: () => copyDemandFromWeek(storeId, weekStartStr, prevWeekStr, token),
-    onSuccess: (data) => { setLocalSlots(data.slots.map((r) => [...r])); setIsDirty(false); qc.invalidateQueries({ queryKey: ["demand", storeId, weekStartStr] }); toast.success("已從上週複製"); },
-    onError: (e: Error) => toast.error(`複製失敗：${e.message}`),
-  });
-
   // ── Work-ability tags (IDEA-02: same table, same brush as headcount) ──────
 
   const { data: orgSkills = [] } = useQuery({
@@ -663,13 +635,13 @@ export default function DemandPage() {
   });
 
   const { data: skillDemands = [] } = useQuery({
-    queryKey: ["skillDemand", storeId, weekStartStr],
-    queryFn: () => fetchSkillDemand(storeId, weekStartStr, token),
+    queryKey: ["skillDemand", storeId],
+    queryFn: () => fetchSkillDemand(storeId, token),
     enabled: !!storeId && !!token,
   });
 
   // Local working copy of every skill's boolean grid, synced from the server
-  // whenever the skill list or this week's tags change (mirrors localSlots).
+  // whenever the skill list or the store's tags change (mirrors localSlots).
   useEffect(() => {
     const m = new Map<string, boolean[][]>();
     for (const sk of orgSkills) {
@@ -688,16 +660,16 @@ export default function DemandPage() {
   const saveAllMut = useMutation({
     mutationFn: async () => {
       const tasks: Promise<unknown>[] = [];
-      if (isDirty) tasks.push(saveDemand(storeId, weekStartStr, localSlots, token));
+      if (isDirty) tasks.push(saveDemand(storeId, localSlots, token));
       for (const skillId of dirtySkillIds) {
         const slots = skillLocalMap.get(skillId);
-        if (slots) tasks.push(setSkillDemand(storeId, weekStartStr, { skill_id: skillId, slots }, token));
+        if (slots) tasks.push(setSkillDemand(storeId, { skill_id: skillId, slots }, token));
       }
       await Promise.all(tasks);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["demand", storeId, weekStartStr] });
-      qc.invalidateQueries({ queryKey: ["skillDemand", storeId, weekStartStr] });
+      qc.invalidateQueries({ queryKey: ["demand", storeId] });
+      qc.invalidateQueries({ queryKey: ["skillDemand", storeId] });
       setIsDirty(false);
       setDirtySkillIds(new Set());
       toast.success("已儲存");
@@ -705,14 +677,14 @@ export default function DemandPage() {
     onError: (e: Error) => toast.error(`儲存失敗：${e.message}`),
   });
 
-  const isMutating = saveAllMut.isPending || copyMut.isPending;
+  const isMutating = saveAllMut.isPending;
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-white">人力需求設定</h1>
-          <p className="mt-1 text-sm text-white/40">設定各時段所需的最低人力，供自動排班參考</p>
+          <h1 className="text-2xl font-semibold text-white">常態人力需求</h1>
+          <p className="mt-1 text-sm text-white/40">設定各時段所需的最低人力，每週沿用，供自動排班參考</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Select value={storeId} onValueChange={setSelectedStoreId}>
@@ -723,11 +695,6 @@ export default function DemandPage() {
               {stores.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
             </SelectContent>
           </Select>
-          <div className="flex items-center gap-1 rounded-xl border border-white/10 bg-white/5 px-2 h-9">
-            <button onClick={() => shiftWeek(-1)} className="rounded p-1 text-white/40 hover:text-white hover:bg-white/10 transition-colors"><ChevronLeft className="size-4" /></button>
-            <span className="px-2 text-sm text-white/70 min-w-[100px] text-center">{weekLabel}</span>
-            <button onClick={() => shiftWeek(1)} className="rounded p-1 text-white/40 hover:text-white hover:bg-white/10 transition-colors"><ChevronRight className="size-4" /></button>
-          </div>
         </div>
       </div>
 
@@ -736,7 +703,6 @@ export default function DemandPage() {
       <DemandGrid
         slots={localSlots}
         onChange={handleChange}
-        weekDates={weekDates}
         loading={isLoading}
         skills={orgSkills}
         skillSlots={skillLocalMap}
@@ -749,9 +715,6 @@ export default function DemandPage() {
           onClick={() => saveAllMut.mutate()} disabled={isMutating || (!isDirty && dirtySkillIds.size === 0)}>
           {saveAllMut.isPending ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
           {(isDirty || dirtySkillIds.size > 0) ? "儲存變更" : "已儲存"}
-        </Button>
-        <Button variant="outline" className="gap-2 border-white/10 text-white/60 hover:bg-white/5 hover:text-white" onClick={() => copyMut.mutate()} disabled={isMutating}>
-          {copyMut.isPending ? <Loader2 className="size-4 animate-spin" /> : <Copy className="size-4" />}從上週複製
         </Button>
         <Button variant="outline" className="gap-2 border-white/10 text-white/60 hover:bg-white/5 hover:text-white" onClick={() => { setLocalSlots(emptySlots()); setIsDirty(true); }} disabled={isMutating}>
           <Trash2 className="size-4" />清除全部

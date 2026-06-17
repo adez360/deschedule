@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime, time
+from datetime import datetime, time
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -26,7 +26,6 @@ class DemandTemplateResponse(BaseModel):
 
     id: uuid.UUID
     store_id: uuid.UUID
-    week_start: date
     slots: list[list[int]]
     updated_at: datetime
 

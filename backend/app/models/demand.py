@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, time
+from datetime import datetime, time
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, Time, UniqueConstraint, UUID, func
+from sqlalchemy import DateTime, ForeignKey, Integer, Time, UUID, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,15 +15,15 @@ if TYPE_CHECKING:
 
 
 class DemandTemplate(Base):
-    """Required headcount per slot. slots: int[7][24] — index 0 = Monday 00:00."""
+    """Standing required headcount per slot for a store (IDEA-15). One row per store —
+    no week dimension; the same demand applies to every week.
+    slots: int[7][24] — index 0 = Monday 00:00."""
     __tablename__ = "demand_templates"
-    __table_args__ = (UniqueConstraint("store_id", "week_start", name="uq_demand_store_week"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     store_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("stores.id"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("stores.id"), nullable=False, unique=True, index=True
     )
-    week_start: Mapped[date] = mapped_column(Date, nullable=False)
     slots: Mapped[Any] = mapped_column(JSONB, nullable=False)  # int[7][24]
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

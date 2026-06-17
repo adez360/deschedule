@@ -17,7 +17,6 @@ export interface UserSkillDTO {
 export interface StoreSkillDemandDTO {
   id: string;
   store_id: string;
-  week_start: string;
   skill_id: string;
   slots: boolean[][]; // [7][24] — true = this skill is needed in this slot
   updated_at: string;
@@ -57,26 +56,24 @@ export const revokeSkill = (userId: string, skillId: string, token: string) =>
 
 // ── StoreSkillDemand ─────────────────────────────────────────────────────────
 
-export const fetchSkillDemand = (storeId: string, weekStart: string, token: string) =>
-  apiFetch<StoreSkillDemandDTO[]>(`/stores/${storeId}/skill-demand/${weekStart}`, token);
+export const fetchSkillDemand = (storeId: string, token: string) =>
+  apiFetch<StoreSkillDemandDTO[]>(`/stores/${storeId}/skill-demand`, token);
 
 export const setSkillDemand = (
   storeId: string,
-  weekStart: string,
   body: { skill_id: string; slots: boolean[][] },
   token: string,
 ) =>
-  apiFetch<StoreSkillDemandDTO>(`/stores/${storeId}/skill-demand/${weekStart}`, token, {
+  apiFetch<StoreSkillDemandDTO>(`/stores/${storeId}/skill-demand`, token, {
     method: "PUT",
     body: JSON.stringify(body),
   });
 
 export const deleteSkillDemand = (
   storeId: string,
-  weekStart: string,
   skillId: string,
   token: string,
 ) =>
-  apiFetch<void>(`/stores/${storeId}/skill-demand/${weekStart}/${skillId}`, token, {
+  apiFetch<void>(`/stores/${storeId}/skill-demand/${skillId}`, token, {
     method: "DELETE",
   });

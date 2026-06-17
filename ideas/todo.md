@@ -8,6 +8,19 @@
 > 註：務必用 **`localhost:3000`**（前端直連）而非 nginx `localhost:80` —— 後者會讓 NextAuth client session 抓不到
 > access_token（`ClientFetchError`），全站資料載不進來。實測完已將 門市A 還原（manager=None, color=#2563EB）。
 
+- **常態人力需求（IDEA-15，未 commit）**（決策 G1 純常態、不留逐週差異，見 `ideas/idea-15-standing-demand.md`）：
+  人力需求表改為**常態表**，每店設定一次後每週沿用，不再以 `week_start` 為鍵。
+  - 後端：`DemandTemplate` 去 `week_start`、`store_id` 改唯一；`StoreSkillDemand` 唯一鍵改 `(store_id, skill_id)`；
+    `GET/PUT /stores/{id}/demand`、`GET/PUT/DELETE /stores/{id}/skill-demand` 去掉週參數；刪除 `copy-from/{week}` 端點
+    與 `_assert_monday`；`scheduler.py` 需求查詢去週過濾（每店單筆）。migration `d6e7f8a9b0c1`（**新 head**，已套用 dev DB，
+    去重保留 `updated_at` 最新一筆）
+  - 前端：`/settings/demand` 移除週切換器 + 「從上週複製」按鈕，標題改「常態人力需求」；`demand-api.ts`/`skills-api.ts`
+    去週參數；`schedules/page.tsx` 覆蓋率疊加層的 `fetchDemandMaybe`/`fetchSkillDemand` 同步去週
+  - 驗證：✅ FE typecheck（僅餘 2 個既有 Base UI `Select.onValueChange` 型別誤差）；後端 compile + 熱重載乾淨、
+    OpenAPI 新路由正確；migration 套用後實測每店塌縮為 1 列、`week_start` 欄移除、新唯一鍵就位；
+    登入後 `GET /demand` 回傳 `{id, slots, store_id, updated_at}`（無 `week_start`）✅
+  - 待辦：瀏覽器實測（編輯常態需求 → 儲存 → 重整持久化；技能標籤；自動排班讀常態需求）
+
 - **門市管理頁面擴充（PLAN §5.3.3 item 2）**：`/settings/stores` 清單 + CRUD 原已實作；本次新增
   `Store.manager_user_id`（門市負責人，FK users `ON DELETE SET NULL`）+ `Store.color`（門市代表色 hex）。
   - 後端：`models/store.py` + `schemas/store.py`（Create/Update/Response 三者）+ `stores.py` PATCH 兩欄可清空；

@@ -107,7 +107,6 @@ export type DemandSlots = number[][];
 export interface DemandTemplate {
   id: string;
   store_id: string;
-  week_start: string;
   slots: DemandSlots;
   updated_at: string;
 }

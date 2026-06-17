@@ -943,15 +943,15 @@ function ManagerSchedules() {
   });
 
   const { data: demandData } = useQuery({
-    queryKey: ["demand", storeId, weekStartStr],
-    queryFn: () => fetchDemandMaybe(storeId, weekStartStr, token),
+    queryKey: ["demand", storeId],
+    queryFn: () => fetchDemandMaybe(storeId, token),
     enabled: !!storeId && !!token,
   });
 
   // ── Skill-demand overlay (E1) — only needed on the coverage tab ─────────────
   const { data: skillDemand = [] } = useQuery({
-    queryKey: ["skillDemand", storeId, weekStartStr],
-    queryFn: () => fetchSkillDemand(storeId, weekStartStr, token),
+    queryKey: ["skillDemand", storeId],
+    queryFn: () => fetchSkillDemand(storeId, token),
     enabled: !!storeId && !!token && activeTab === "coverage",
   });
 

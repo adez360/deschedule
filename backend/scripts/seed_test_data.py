@@ -140,17 +140,13 @@ async def seed() -> None:
                 print(f"[ok] 建立員工：{emp_data['name']}")
             created_users.append(user)
 
-        # Create demand template
+        # Create standing demand template (one per store, IDEA-15)
         dem_result = await session.execute(
-            select(DemandTemplate).where(
-                DemandTemplate.store_id == store.id,
-                DemandTemplate.week_start == WEEK_START,
-            )
+            select(DemandTemplate).where(DemandTemplate.store_id == store.id)
         )
         if not dem_result.scalar_one_or_none():
             session.add(DemandTemplate(
                 store_id=store.id,
-                week_start=WEEK_START,
                 slots=make_demand(),
             ))
             print("[ok] 建立人力需求模板")

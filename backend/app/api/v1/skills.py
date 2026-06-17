@@ -1,5 +1,4 @@
 import uuid
-from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -21,14 +20,6 @@ from app.schemas.skill import (
 )
 
 router = APIRouter(tags=["skills"])
-
-
-def _assert_monday(d: date) -> None:
-    if d.weekday() != 0:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="week_start must be a Monday",
-        )
 
 
 async def _get_store_and_check_access(store_id: uuid.UUID, current_user: User, db: AsyncSession) -> Store:
@@ -203,41 +194,34 @@ async def revoke_skill(
 # ── StoreSkillDemand ───────────────────────────────────────────────────────────
 
 @router.get(
-    "/stores/{store_id}/skill-demand/{week_start}",
+    "/stores/{store_id}/skill-demand",
     response_model=list[StoreSkillDemandResponse],
 )
 async def list_skill_demand(
     store_id: uuid.UUID,
-    week_start: date,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    _assert_monday(week_start)
     await _get_store_and_check_access(store_id, current_user, db)
 
     result = await db.execute(
         select(StoreSkillDemand)
         .options(selectinload(StoreSkillDemand.skill))
-        .where(
-            StoreSkillDemand.store_id == store_id,
-            StoreSkillDemand.week_start == week_start,
-        )
+        .where(StoreSkillDemand.store_id == store_id)
     )
     return result.scalars().all()
 
 
 @router.put(
-    "/stores/{store_id}/skill-demand/{week_start}",
+    "/stores/{store_id}/skill-demand",
     response_model=StoreSkillDemandResponse,
 )
 async def set_skill_demand(
     store_id: uuid.UUID,
-    week_start: date,
     body: StoreSkillDemandSet,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    _assert_monday(week_start)
     store = await _get_store_and_check_access(store_id, current_user, db)
     await assert_permission(current_user, "store.demand.edit", db)
 
@@ -251,7 +235,6 @@ async def set_skill_demand(
     result = await db.execute(
         select(StoreSkillDemand).where(
             StoreSkillDemand.store_id == store_id,
-            StoreSkillDemand.week_start == week_start,
             StoreSkillDemand.skill_id == body.skill_id,
         )
     )
@@ -261,7 +244,7 @@ async def set_skill_demand(
         demand.slots = body.slots
     else:
         demand = StoreSkillDemand(
-            store_id=store_id, week_start=week_start, skill_id=body.skill_id, slots=body.slots
+            store_id=store_id, skill_id=body.skill_id, slots=body.slots
         )
         db.add(demand)
 
@@ -271,24 +254,21 @@ async def set_skill_demand(
 
 
 @router.delete(
-    "/stores/{store_id}/skill-demand/{week_start}/{skill_id}",
+    "/stores/{store_id}/skill-demand/{skill_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_skill_demand(
     store_id: uuid.UUID,
-    week_start: date,
     skill_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    _assert_monday(week_start)
     await _get_store_and_check_access(store_id, current_user, db)
     await assert_permission(current_user, "store.demand.edit", db)
 
     result = await db.execute(
         select(StoreSkillDemand).where(
             StoreSkillDemand.store_id == store_id,
-            StoreSkillDemand.week_start == week_start,
             StoreSkillDemand.skill_id == skill_id,
         )
     )
