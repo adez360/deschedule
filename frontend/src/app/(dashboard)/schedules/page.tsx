@@ -5,7 +5,7 @@ import { useSession } from "next-auth/react";
 import { useQuery, useQueries, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft, ChevronRight, Zap, Send, Archive, CalendarDays, Copy, Check,
-  Loader2, Maximize2, Minimize2, Trash2, X,
+  Loader2, Maximize2, Minimize2, Trash2, X, AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -24,7 +24,13 @@ import {
 } from "@/lib/schedules-api";
 import { fetchUserAvailability } from "@/lib/availability-api";
 import { fetchDemandMaybe, emptySlots } from "@/lib/demand-api";
+import { fetchSkillDemand, fetchUserSkills } from "@/lib/skills-api";
 import { DAYS, DISPLAY_HOURS } from "@/lib/constants";
+import { EmployeeSchedule } from "./_components/employee-schedule";
+
+// 進入「管理（可編輯）」版的權限門檻（F）；其餘登入者落到 EmployeeSchedule 唯讀版。
+// 與側邊欄 app-sidebar.tsx 的 showManager 同一組，外加 system.all 超級管理員萬用權限。
+const MANAGE_PERMS = ["store.schedule.edit", "org.schedule.arrange", "org.schedule.view_all"];
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 
@@ -95,7 +101,7 @@ function EmployeeGrid({ employees, weekDates, loading, isFullscreen }: {
   );
 
   return (
-    <TooltipProvider delayDuration={200}>
+    <TooltipProvider delay={200}>
       <div className="relative">
         {/* Right-fade scroll hint */}
         {!isAtRight && (
@@ -223,13 +229,15 @@ function EmployeeGrid({ employees, weekDates, loading, isFullscreen }: {
 
 // ─── CoverageHeatmap ───────────────────────────────────────────────────────
 
-function CoverageHeatmap({ actual, demand, weekDates, loading, isFullscreen }: {
+function CoverageHeatmap({ actual, demand, skillGaps, weekDates, loading, isFullscreen }: {
   actual: number[][];
   demand: number[][];
+  skillGaps: Map<string, string[]>;  // `${day}-${hour}` → 缺少的能力標籤名稱（E1）
   weekDates: Date[];
   loading: boolean;
   isFullscreen: boolean;
 }) {
+  const hasAnyGap = skillGaps.size > 0;
   const [isAtBottom, setIsAtBottom] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -241,6 +249,7 @@ function CoverageHeatmap({ actual, demand, weekDates, loading, isFullscreen }: {
   }, [isFullscreen]);
 
   return (
+    <TooltipProvider delay={200}>
     <div className="relative overflow-hidden rounded-2xl border border-white/10"
       style={{ background: "rgba(255,255,255,0.03)" }}>
 
@@ -272,6 +281,12 @@ function CoverageHeatmap({ actual, demand, weekDates, loading, isFullscreen }: {
             <span className="text-[11px] text-white/40">{label}</span>
           </div>
         ))}
+        {hasAnyGap && (
+          <div className="flex items-center gap-1.5">
+            <AlertTriangle className="size-3 text-amber-300" />
+            <span className="text-[11px] text-white/40">缺能力標籤</span>
+          </div>
+        )}
       </div>
 
       {/* Scroll container */}
@@ -319,13 +334,31 @@ function CoverageHeatmap({ actual, demand, weekDates, loading, isFullscreen }: {
                 {DAYS.map((_, di) => {
                   const a = actual[di][h];
                   const dem = demand[di][h];
+                  const gaps = skillGaps.get(`${di}-${h}`);
+                  const hasGap = !!gaps && gaps.length > 0;
+                  const cellClass = "relative h-8 rounded flex items-center justify-center text-[11px] font-medium text-white/70";
+                  const inner = (
+                    <>
+                      {dem > 0 ? `${a}/${dem}` : "—"}
+                      {hasGap && (
+                        <AlertTriangle className="absolute top-0.5 right-0.5 size-2.5 text-amber-300" />
+                      )}
+                    </>
+                  );
                   return (
                     <div key={di} className="border-r border-white/[0.06] last:border-r-0 p-[3px]">
-                      <div
-                        className="h-8 rounded flex items-center justify-center text-[11px] font-medium text-white/70"
-                        style={{ background: coverageColor(a, dem) }}>
-                        {dem > 0 ? `${a}/${dem}` : "—"}
-                      </div>
+                      {hasGap ? (
+                        <Tooltip>
+                          <TooltipTrigger render={<div className={cellClass} style={{ background: coverageColor(a, dem) }} />}>
+                            {inner}
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="text-xs">
+                            缺能力：{gaps!.join("、")}
+                          </TooltipContent>
+                        </Tooltip>
+                      ) : (
+                        <div className={cellClass} style={{ background: coverageColor(a, dem) }}>{inner}</div>
+                      )}
                     </div>
                   );
                 })}
@@ -335,6 +368,7 @@ function CoverageHeatmap({ actual, demand, weekDates, loading, isFullscreen }: {
         </div>{/* end fullscreen max-width wrapper */}
       </div>
     </div>
+    </TooltipProvider>
   );
 }
 
@@ -830,7 +864,9 @@ function ManualEditView({
 
 // ─── Page ──────────────────────────────────────────────────────────────────
 
-export default function SchedulesPage() {
+// 管理（可編輯）版：產生／發布／封存／手動編輯 + 覆蓋率（疊加能力需求標記）。
+// 僅 store.schedule.edit 等管理權限者進入（見預設匯出的權限分流）。
+function ManagerSchedules() {
   const { data: session } = useSession();
   const token       = session?.user?.access_token ?? "";
   const orgId       = session?.user?.organization_id ?? "";
@@ -912,6 +948,29 @@ export default function SchedulesPage() {
     enabled: !!storeId && !!token,
   });
 
+  // ── Skill-demand overlay (E1) — only needed on the coverage tab ─────────────
+  const { data: skillDemand = [] } = useQuery({
+    queryKey: ["skillDemand", storeId, weekStartStr],
+    queryFn: () => fetchSkillDemand(storeId, weekStartStr, token),
+    enabled: !!storeId && !!token && activeTab === "coverage",
+  });
+
+  // Distinct users actually assigned this week → fetch their skills to judge coverage.
+  const assignedUserIds = useMemo(() => {
+    const set = new Set<string>();
+    (scheduleDetail?.assignments ?? []).forEach((a) => set.add(a.user_id));
+    return [...set];
+  }, [scheduleDetail]);
+
+  const userSkillQueries = useQueries({
+    queries: assignedUserIds.map((uid) => ({
+      queryKey: ["userSkills", uid],
+      queryFn: () => fetchUserSkills(uid, token),
+      enabled: !!token && skillDemand.length > 0,
+      staleTime: 5 * 60_000,
+    })),
+  });
+
   // ── Derived data ─────────────────────────────────────────────────────────
 
   const status = currentScheduleSummary?.status ?? null;
@@ -923,6 +982,42 @@ export default function SchedulesPage() {
     () => (scheduleDetail ? buildActual(scheduleDetail.assignments) : Array.from({ length: 7 }, () => Array(24).fill(0))),
     [scheduleDetail],
   );
+
+  // userId → set of skill_ids the user holds
+  const userSkillSet = useMemo(() => {
+    const m = new Map<string, Set<string>>();
+    assignedUserIds.forEach((uid, i) => {
+      m.set(uid, new Set((userSkillQueries[i]?.data ?? []).map((us) => us.skill_id)));
+    });
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assignedUserIds, userSkillQueries.map((q) => q.dataUpdatedAt).join(",")]);
+
+  // `${day}-${hour}` → names of demanded skills NOT covered by any assigned employee there.
+  // Judged independently of headcount demand (E-ii): a skill can be missing even where headcount is met.
+  const skillGaps = useMemo(() => {
+    const gaps = new Map<string, string[]>();
+    if (skillDemand.length === 0) return gaps;
+    const byCell = new Map<string, AssignmentDTO[]>();
+    (scheduleDetail?.assignments ?? []).forEach((a) => {
+      const k = `${a.day}-${a.hour}`;
+      const arr = byCell.get(k) ?? []; arr.push(a); byCell.set(k, arr);
+    });
+    for (const sd of skillDemand) {
+      for (let day = 0; day < 7; day++) {
+        for (let hour = 0; hour < 24; hour++) {
+          if (!sd.slots?.[day]?.[hour]) continue;
+          const assigned = byCell.get(`${day}-${hour}`) ?? [];
+          const covered = assigned.some((a) => userSkillSet.get(a.user_id)?.has(sd.skill_id));
+          if (!covered) {
+            const k = `${day}-${hour}`;
+            const arr = gaps.get(k) ?? []; arr.push(sd.skill.name); gaps.set(k, arr);
+          }
+        }
+      }
+    }
+    return gaps;
+  }, [skillDemand, scheduleDetail, userSkillSet]);
 
   // ── Mutations ─────────────────────────────────────────────────────────────
 
@@ -1165,6 +1260,7 @@ export default function SchedulesPage() {
             <CoverageHeatmap
               actual={actual}
               demand={demandData?.slots ?? emptySlots()}
+              skillGaps={skillGaps}
               weekDates={weekDates}
               loading={scheduleLoading}
               isFullscreen={isFullscreen}
@@ -1201,4 +1297,31 @@ export default function SchedulesPage() {
       </div>
     </div>
   );
+}
+
+// ─── Permission split (A1 + F) ───────────────────────────────────────────────
+// Same route, two experiences: store.schedule.edit (or org-level arrange/view_all,
+// or system.all) → editable manager console; everyone else → read-only EmployeeSchedule.
+
+export default function SchedulesPage() {
+  const { data: session, status } = useSession();
+
+  const canManage = useMemo(
+    () =>
+      session?.user?.role_groups?.some((rg) =>
+        rg.permissions.some((p) => p === "system.all" || MANAGE_PERMS.includes(p)),
+      ) ?? false,
+    [session],
+  );
+
+  if (status === "loading") {
+    return (
+      <div className="space-y-6">
+        <Skeleton className="h-9 w-48 rounded-lg bg-white/5" />
+        <Skeleton className="h-[60vh] w-full rounded-2xl bg-white/5" />
+      </div>
+    );
+  }
+
+  return canManage ? <ManagerSchedules /> : <EmployeeSchedule />;
 }

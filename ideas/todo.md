@@ -15,7 +15,16 @@
   - 前端：`schedules-api.ts` StoreDTO + `stores-api.ts` StoreBody 加兩欄；dialog 加負責人下拉（`fetchOrgUsers`）+
     8 色代表色選擇器；卡片顯示色彩 accent（頂部色條 + icon 底色）+ 負責人姓名
   - 驗證：✅ FE typecheck 乾淨、後端 schema/import 載入、migration head、ORM round-trip（寫入 FK+color → 還原）通過
-  - 待辦：瀏覽器實測（新增/編輯設定負責人+代表色、清單顯示）；**門市班表檢視（item 3）尚未做** —— 下一步候選
+  - 待辦：瀏覽器實測（新增/編輯設定負責人+代表色、清單顯示）；門市班表檢視（item 3）已於 IDEA-14 完成 ↓
+
+- **班表檢視雙入口（IDEA-14，未 commit）**（決策 A1+B1+C1+D1+E1+F+G3，見 `ideas/idea-14-store-schedule-view.md`）：
+  `/schedules` 依權限分流（A1，同一路由）。**管理版**（`store.schedule.edit`/`org.schedule.arrange`/`org.schedule.view_all`/`system.all`）
+  維持原有作業 + 覆蓋率分頁新增能力需求疊加角標（E1：`AlertTriangle` + tooltip，前端 `fetchSkillDemand` + 批次
+  `fetchUserSkills` 現算缺哪些能力，無新後端端點，獨立於人數需求判定）。**員工版**（其餘登入者，標題「我的班表」）：
+  新 `_components/employee-schedule.tsx`，週曆（預設、依 `Store.color` 分色）+ 圖表雙模式（B1），跨門市彙整自己
+  當週班次（C1）、僅含已發佈/已封存、保留 iCal 訂閱 + 全螢幕。`Store.manager_user_id` 不連動（G3）。純前端、無 migration。
+  - 驗證：✅ FE typecheck（新增碼乾淨；僅餘 2 個既有 Base UI `Select.onValueChange` 型別誤差，非本次引入）
+  - 待辦：瀏覽器實測 — ① 管理者帳號看管理版 + 覆蓋率缺能力角標；② 一般員工帳號看「我的班表」週曆/圖表（只看自己、分色）
 
 - **IDEA-13 左側導覽列重整**（決策 A1+B1+C1+D優化，見 `ideas/idea-13-sidebar-nav-redesign.md`）：
   `app-sidebar.tsx` 改三組 `個人 / 排班管理 / 組織設定`；`排班時段`→`我的可用時段`、`門市偏好`圖示改 `Heart`；
@@ -75,9 +84,10 @@
 
 - [ ] 班表 PDF 匯出
 - [ ] Email 通知系統（含截止提醒）— **IDEA-11 的「未設定標準模板」名單通知併入此項**
-- [ ] 門市管理頁面（清單 + 管理介面 + 班表檢視，含 `Store.manager_user_id` / `Store.color`，PLAN §5.3.3）
-- [ ] 個人班表依門市分色檢視頁面（PLAN §5.3.2，可複用現有 iCal 機制）
-      → 對應 **`ideas/IDEA-04.md`「個人班表檢視」**，目前該文件只有一行標題，需要展開規格
+- [x] 門市管理頁面（清單 + 管理介面 + 班表檢視，含 `Store.manager_user_id` / `Store.color`，PLAN §5.3.3）
+      → 班表檢視（item 3）併入 IDEA-14 完成（見頂部）
+- [x] 個人班表依門市分色檢視頁面（PLAN §5.3.2，可複用現有 iCal 機制）
+      → IDEA-14 員工版「我的班表」週曆模式即此（依 `Store.color` 分色）；`ideas/IDEA-04.md` 規格併入 idea-14
 - [ ] employees 可用時段 tab 接上管理者模板編輯 UI（IDEA-11，API 已備）
 
 ---
