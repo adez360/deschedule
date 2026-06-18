@@ -26,6 +26,7 @@ import {
   type SkillDTO,
 } from "@/lib/skills-api";
 import { AvailabilityTab } from "./_components/availability-tab";
+import { TemplateTab } from "./_components/template-tab";
 import { PreferencesTab } from "./_components/preferences-tab";
 import { PermissionsTab } from "./_components/permissions-tab";
 import { ScheduleHistoryTab } from "./_components/schedule-history-tab";
@@ -638,6 +639,13 @@ function DetailPanel({
               <h3 className="text-sm font-medium text-white/70">可用時段</h3>
             </div>
             <AvailabilityTab userId={user.id} token={token} editable={perms.availEdit} />
+          </div>
+          <div className="space-y-3 border-t border-white/[0.07] pt-6">
+            <div className="flex items-center gap-2">
+              <CalendarClock className="size-3.5 text-white/40" />
+              <h3 className="text-sm font-medium text-white/70">標準週表</h3>
+            </div>
+            <TemplateTab userId={user.id} token={token} editable={perms.availEdit} />
           </div>
           <div className="space-y-3 border-t border-white/[0.07] pt-6">
             <div className="flex items-center gap-2">
