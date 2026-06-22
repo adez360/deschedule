@@ -100,3 +100,14 @@ export const updateMe = (body: UserUpdateBody, token: string) =>
     method: "PATCH",
     body: JSON.stringify(body),
   });
+
+/** Self-service password change (IDEA-16). 400 = wrong current password,
+ * 409 = pending account (no password yet). */
+export const changeMyPassword = (
+  body: { current_password: string; new_password: string },
+  token: string,
+) =>
+  apiFetch<void>("/users/me/password", token, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });

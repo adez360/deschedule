@@ -5,8 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import assert_org_access, assert_permission, get_current_user, get_user_permissions
 from app.core.database import get_db
+from app.core.security import hash_password, verify_password
 from app.models.user import User
-from app.schemas.user import UserResponse, UserUpdate, serialize_user
+from app.schemas.user import PasswordChangeRequest, UserResponse, UserUpdate, serialize_user
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -39,6 +40,29 @@ async def update_me(
     await db.commit()
     await db.refresh(current_user)
     return serialize_user(current_user, perms, current_user.id)
+
+
+@router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT)
+async def change_my_password(
+    body: PasswordChangeRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # Any authenticated, non-pending user may change their own password — no
+    # extra permission bit (mirrors the "own data" openness of GET /users/me).
+    if current_user.hashed_password is None:
+        # Pending account (invite not yet completed) — must onboard first.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Account has no password set; complete the invite flow first",
+        )
+    if not verify_password(body.current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect",
+        )
+    current_user.hashed_password = hash_password(body.new_password)
+    await db.commit()
 
 
 @router.get("/{user_id}", response_model=UserResponse)

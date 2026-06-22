@@ -28,6 +28,14 @@ class UserUpdate(BaseModel):
     home_store_id: uuid.UUID | None = Field(default=None)
 
 
+class PasswordChangeRequest(BaseModel):
+    # Self-service password change (IDEA-16). Verifies the current password
+    # before setting the new one. Pending accounts (no password yet) must use
+    # the /onboard invite flow instead.
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class RoleGroupBrief(BaseModel):
     id: uuid.UUID
     name: str
