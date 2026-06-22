@@ -31,6 +31,7 @@ import {
   SidebarSeparator,
 } from "@/components/ui/sidebar";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { hasPermission, isScheduleManager, isOrgAdmin } from "@/lib/permissions";
 import type { Session } from "next-auth";
 
 type NavMatchCtx = { pathname: string; tab: string | null };
@@ -107,24 +108,13 @@ type Props = {
 };
 
 export function AppSidebar({ user }: Props) {
-  // system.all is the super-admin wildcard — matches any permission query
-  // (mirrors the `has()` helper used on the pages themselves)
-  const hasPermission = (perms: string[]) =>
-    user.role_groups?.some((rg) =>
-      rg.permissions.some((p) => p === "system.all" || perms.includes(p))
-    ) ?? false;
+  const showManager = isScheduleManager(user);
 
-  const showManager = hasPermission([
-    "store.schedule.edit",
-    "org.schedule.arrange",
-    "org.schedule.view_all",
-  ]);
-
-  const showAdmin = hasPermission(["org.manage", "system.all"]);
+  const showAdmin = isOrgAdmin(user);
 
   // 人員管理：排班者、組織管理員、或專責人事（org.employee.manage）皆可見
   const showPeople =
-    showManager || showAdmin || hasPermission(["org.employee.manage"]);
+    showManager || showAdmin || hasPermission(user, ["org.employee.manage"]);
 
   // 排班管理：管理者看班表作業，管理員另加排班參數設定
   const scheduleNav: NavItem[] = [
