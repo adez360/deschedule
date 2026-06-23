@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 1440  # 24h for dev; shorten + add refresh in prod
     refresh_token_expire_days: int = 7
     allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:80"]
+    scheduler_time_limit_seconds: float = 10.0  # CP-SAT solve budget per generate run
 
 
 settings = Settings()

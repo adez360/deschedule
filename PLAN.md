@@ -901,8 +901,7 @@ PATCH  /api/schedules/:scheduleId/assignments/:id  # 手動拖曳覆蓋
 
 ### Phase 3 — 優化與擴充（建議 4 週）
 
-- [ ] MILP 求解器整合（OR-Tools）
-- [ ] 跨週多週班表並排顯示
+- [x] 🆕 **CP-SAT 求解器整合（OR-Tools）**（2026-06-22）：`scheduler.solve_org_schedule()` dispatcher 取代直接呼叫 greedy——優先 `run_cpsat_org()`（CP-SAT 全域最佳解），OR-Tools 未安裝／求解逾時（`settings.scheduler_time_limit_seconds`，預設 10s）／例外時自動退回 `run_greedy_org()`。約束集與 greedy 完全一致（可用性、單店單時、不超配、daily cap、能力覆蓋軟約束）；目標函數為字典序加權整數（覆蓋 ≫ 能力 ≫ 偏好），對應 greedy 的「先能力後一般」與覆蓋優先（B2）。`run_greedy_org` 保留為 fallback（符合 §4.3「小規模 MILP、大規模 greedy」原意）。議題 1「最短連續工時」本版未納（行為保留版，留後續）。含 `backend/tests/test_scheduler.py` 單元測試 + 真實資料唯讀驗證（greedy 221 → CP-SAT 228 班次／約 640ms）。見 §4.3
 - [ ] 行動端 PWA 推播通知
 - [ ] 薪資報表自動歸檔（班表 archived 時觸發）
 - [ ] 多語系支援（zh-TW / en）

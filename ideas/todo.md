@@ -121,7 +121,13 @@
 
 ## Phase 3 剩餘項目（PLAN.md §10）
 
-- [ ] MILP 求解器整合（OR-Tools CP-SAT，取代 greedy）
+- [x] **MILP/CP-SAT 求解器整合（OR-Tools，取代 greedy）**（2026-06-22，行為保留版）：
+      `scheduler.solve_org_schedule()` dispatcher → 優先 `run_cpsat_org()`（CP-SAT 全域最佳解），
+      OR-Tools 未裝／逾時（`scheduler_time_limit_seconds` 預設 10s）／例外 → 退回 `run_greedy_org()`（保留作 fallback）。
+      約束集與 greedy 完全一致（可用性／單店單時／不超配／daily cap／能力覆蓋軟約束）；字典序加權整數目標（覆蓋 ≫ 能力 ≫ 偏好）。
+      議題 1「最短連續工時」本版未納（留後續）。`ortools>=9.0` 解註解進 requirements.txt（鏡像需 `docker compose build backend`；已 live 裝入運行中容器測試）。
+      `backend/tests/test_scheduler.py` 11 項單元測試全過；真實資料唯讀驗證（org 3 店/8 人/需求 280，週 6/15）：greedy 221 → **CP-SAT 228** 班次／約 640ms、無重複佔位、覆蓋 ≥ greedy。
+      待辦：① 透過 generate endpoint 走一次 live 產生（會建草稿、需還原）+ 瀏覽器確認；② `docker compose build backend` 讓 ortools 進鏡像（目前只在運行中容器）。
 - [ ] 跨週多週班表並排顯示
 - [ ] 行動端 PWA 推播通知
 - [ ] 薪資報表自動歸檔（班表 archived 時觸發 — 目前已有 `_create_payroll_reports()` 但需確認自動觸發是否完整）

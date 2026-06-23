@@ -21,7 +21,7 @@ from app.schemas.schedule import (
     ScheduleWithAssignments,
 )
 from app.services.payroll import create_payroll_reports
-from app.services.scheduler import load_org_inputs, run_greedy_org
+from app.services.scheduler import load_org_inputs, solve_org_schedule
 
 router = APIRouter(tags=["schedules"])
 
@@ -155,7 +155,7 @@ async def generate_org_schedules(
     )
 
     inputs = await load_org_inputs(org_id, body.week_start, db)
-    raw = run_greedy_org(inputs, target_store_ids=list(draft_schedules), fixed=fixed)
+    raw = solve_org_schedule(inputs, target_store_ids=list(draft_schedules), fixed=fixed)
 
     for a in raw:
         db.add(Assignment(

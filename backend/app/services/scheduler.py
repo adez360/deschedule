@@ -12,15 +12,25 @@ label form a group; an employee anchored at a home store may only be scheduled
 at that store and at stores in its group. Employees without a home store float
 across every store their role groups cover (legacy behaviour).
 
-Phase 3 will replace run_greedy_org() with OR-Tools CP-SAT keeping the same
-interface.
+Phase 3 (CP-SAT): ``run_cpsat_org()`` solves the same problem to global
+optimality with OR-Tools, keeping the exact constraint set the greedy heuristic
+enforced (availability, one-store-per-hour, no over-staffing, daily caps,
+best-effort skill coverage). ``solve_org_schedule()`` is the dispatcher: it
+prefers CP-SAT and falls back to ``run_greedy_org()`` when OR-Tools is
+unavailable or the solver fails to find a solution within the time budget.
 """
+import logging
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 from app.models.availability import Availability, AvailabilityTemplate, StorePreference
 from app.models.demand import DemandTemplate
@@ -297,3 +307,173 @@ def run_greedy_org(
                 occupied[day][hour].add(uid)
 
     return assignments
+
+
+def run_cpsat_org(
+    inputs: OrgScheduleInputs,
+    target_store_ids: list[uuid.UUID],
+    fixed: list[dict] | None = None,
+    time_limit_s: float = 10.0,
+) -> list[dict] | None:
+    """
+    OR-Tools CP-SAT solve of the same problem ``run_greedy_org`` approximates,
+    to global optimality within ``time_limit_s``. Same interface and the exact
+    same constraint set, so callers can swap freely:
+
+    * **availability** — a decision var exists only for a slot the user is free
+      to work (``avail`` true, not already occupied by a ``fixed`` assignment);
+    * **one store per user per hour** — ``AddAtMostOne`` over a user's stores;
+    * **no over-staffing** — assigned ≤ remaining gap (demand − fixed) per slot;
+    * **daily caps** — per (user, day) sum ≤ ``daily_caps`` minus fixed hours;
+    * **best-effort skill coverage** — soft: a reward var per still-needed
+      ``StoreSkillDemand`` slot, satisfiable by a fixed or freshly assigned
+      qualified employee.
+
+    The objective is lexicographic via scaled weights — **coverage ≫ skill ≫
+    preference** — mirroring greedy's skill-pass-before-general-pass ordering
+    and coverage-first (B2) policy. Coverage is soft (the empty assignment is
+    always feasible), so the model never goes infeasible.
+
+    Returns the assignment list, or ``None`` if OR-Tools is unavailable or no
+    solution was found (the caller then falls back to greedy).
+    """
+    try:
+        from ortools.sat.python import cp_model
+    except ImportError:
+        return None
+
+    fixed = fixed or []
+    target_set = set(target_store_ids)
+    targets = [sid for sid in inputs.store_ids if sid in target_set]
+    if not targets or not inputs.user_ids:
+        return []
+
+    # ── Fixed occupancy bookkeeping (mirrors run_greedy_org) ──────────────────
+    fixed_occupied: dict[tuple[int, int], set[uuid.UUID]] = defaultdict(set)
+    fixed_daily: dict[tuple[uuid.UUID, int], int] = defaultdict(int)
+    fixed_count = {sid: [[0] * 24 for _ in range(7)] for sid in targets}
+    fixed_present: dict[tuple[uuid.UUID, int, int], set[uuid.UUID]] = defaultdict(set)
+    for f in fixed:
+        d, h, u, s = f["day"], f["hour"], f["user_id"], f["store_id"]
+        fixed_occupied[(d, h)].add(u)
+        fixed_daily[(u, d)] += 1
+        if s in target_set:
+            fixed_count[s][d][h] += 1
+            fixed_present[(s, d, h)].add(u)
+
+    model = cp_model.CpModel()
+    x: dict[tuple[uuid.UUID, uuid.UUID, int, int], cp_model.IntVar] = {}
+
+    # ── Decision vars: only viable (user, store, day, hour) combinations ──────
+    for u in inputs.user_ids:
+        avail_u = inputs.avail[u]
+        elig_u = inputs.eligible.get(u, set())
+        for d in range(7):
+            for h in range(24):
+                if not avail_u[d][h] or u in fixed_occupied.get((d, h), ()):
+                    continue
+                for s in targets:
+                    if s not in elig_u:
+                        continue
+                    if inputs.demand[s][d][h] - fixed_count[s][d][h] <= 0:
+                        continue  # no headcount room → no over-staffing
+                    x[(u, s, d, h)] = model.NewBoolVar(f"x_{u.int}_{s.int}_{d}_{h}")
+
+    if not x:
+        return []
+
+    # ── One store per user per hour ───────────────────────────────────────────
+    per_user_hour: dict[tuple[uuid.UUID, int, int], list] = defaultdict(list)
+    for (u, s, d, h), var in x.items():
+        per_user_hour[(u, d, h)].append(var)
+    for vars_here in per_user_hour.values():
+        if len(vars_here) > 1:
+            model.AddAtMostOne(vars_here)
+
+    # ── No over-staffing: assigned ≤ remaining gap per (store, day, hour) ─────
+    per_slot: dict[tuple[uuid.UUID, int, int], list] = defaultdict(list)
+    for (u, s, d, h), var in x.items():
+        per_slot[(s, d, h)].append(var)
+    for (s, d, h), vars_sdh in per_slot.items():
+        gap = inputs.demand[s][d][h] - fixed_count[s][d][h]
+        model.Add(sum(vars_sdh) <= gap)
+
+    # ── Daily caps per (user, day) ────────────────────────────────────────────
+    per_user_day: dict[tuple[uuid.UUID, int], list] = defaultdict(list)
+    for (u, s, d, h), var in x.items():
+        per_user_day[(u, d)].append(var)
+    for (u, d), vars_ud in per_user_day.items():
+        budget = inputs.daily_caps.get(u, DAILY_HOUR_MAX) - fixed_daily.get((u, d), 0)
+        model.Add(sum(vars_ud) <= max(budget, 0))
+
+    # ── Best-effort skill coverage (soft reward vars) ─────────────────────────
+    skill_cover_vars: list = []
+    for s in targets:
+        for skill_id, slots in inputs.skill_demand.get(s, {}).items():
+            for d in range(7):
+                for h in range(24):
+                    if not slots[d][h] or inputs.demand[s][d][h] - fixed_count[s][d][h] <= 0:
+                        continue
+                    # already covered by a fixed qualified employee at this slot?
+                    if any(skill_id in inputs.user_skills.get(fu, set())
+                           for fu in fixed_present.get((s, d, h), ())):
+                        continue
+                    qualified = [
+                        x[(u, s, d, h)] for u in inputs.user_ids
+                        if (u, s, d, h) in x and skill_id in inputs.user_skills.get(u, set())
+                    ]
+                    if not qualified:
+                        continue
+                    cov = model.NewBoolVar(f"cov_{s.int}_{skill_id.int}_{d}_{h}")
+                    model.Add(cov <= sum(qualified))  # cov=1 only if a carrier is assigned
+                    skill_cover_vars.append(cov)
+
+    # ── Lexicographic objective: coverage ≫ skill ≫ preference ────────────────
+    def pref_int(u: uuid.UUID, s: uuid.UUID) -> int:
+        return round(inputs.pref.get(u, {}).get(s, 0.5) * 100)  # 0..100
+
+    n = len(x)
+    pref_cap = 100 * n + 1                       # 1 skill cover outranks all preference
+    skill_w = pref_cap
+    cover_w = skill_w * len(skill_cover_vars) + pref_cap  # 1 slot outranks all skill+pref
+
+    model.Maximize(
+        sum((cover_w + pref_int(u, s)) * var for (u, s, _, _), var in x.items())
+        + sum(skill_w * cov for cov in skill_cover_vars)
+    )
+
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = time_limit_s
+    solver.parameters.num_search_workers = 8
+    status = solver.Solve(model)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return None
+
+    return [
+        {"user_id": u, "store_id": s, "day": d, "hour": h}
+        for (u, s, d, h), var in x.items()
+        if solver.Value(var)
+    ]
+
+
+def solve_org_schedule(
+    inputs: OrgScheduleInputs,
+    target_store_ids: list[uuid.UUID],
+    fixed: list[dict] | None = None,
+    time_limit_s: float | None = None,
+) -> list[dict]:
+    """Dispatcher: prefer CP-SAT, fall back to the greedy heuristic.
+
+    Falls back when OR-Tools is not installed, the solver finds no solution
+    within the time budget, or it raises — so a generate run always returns a
+    schedule. ``time_limit_s`` defaults to ``settings.scheduler_time_limit_seconds``.
+    """
+    budget = time_limit_s if time_limit_s is not None else settings.scheduler_time_limit_seconds
+    try:
+        result = run_cpsat_org(inputs, target_store_ids, fixed, budget)
+        if result is not None:
+            return result
+        logger.warning("CP-SAT found no solution within %ss; falling back to greedy", budget)
+    except Exception:  # pragma: no cover - defensive: never let solver crash a run
+        logger.exception("CP-SAT solve failed; falling back to greedy")
+    return run_greedy_org(inputs, target_store_ids, fixed)
